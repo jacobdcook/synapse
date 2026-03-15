@@ -8,6 +8,8 @@ import uuid
 import re
 import base64
 import subprocess
+import time
+import html as html_module
 import urllib.request
 from datetime import datetime
 from pathlib import Path
@@ -25,7 +27,7 @@ from PyQt5.QtWidgets import (
     QProgressBar, QTextEdit
 )
 from PyQt5.QtGui import QFont, QIcon, QKeySequence, QColor, QPixmap, QImage
-from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEnginePage
+from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEnginePage, QWebEngineSettings
 
 import markdown
 from pygments import highlight
@@ -64,6 +66,19 @@ DEFAULT_GEN_PARAMS = {
     "temperature": 0.7,
     "top_p": 0.9,
     "num_ctx": 8192,
+}
+
+DRAFT_FILE = DATA_DIR / "draft.json"
+
+DEFAULT_PROMPT_TEMPLATES = {
+    "Explain": "Explain the following in simple terms:\n\n",
+    "Summarize": "Summarize the following text:\n\n",
+    "Code Review": "Review the following code for bugs, performance, and best practices:\n\n```\n\n```",
+    "Translate": "Translate the following to English:\n\n",
+    "Debug": "Help me debug this error:\n\n",
+    "Unit Tests": "Write unit tests for the following code:\n\n```\n\n```",
+    "Refactor": "Refactor the following code for clarity and efficiency:\n\n```\n\n```",
+    "ELI5": "Explain like I'm 5:\n\n",
 }
 
 _ollama_url = DEFAULT_OLLAMA_URL
@@ -149,6 +164,21 @@ def get_gpu_vram_gb():
     except (FileNotFoundError, subprocess.TimeoutExpired, ValueError):
         pass
     return 0
+
+
+def get_gpu_vram_usage():
+    try:
+        result = subprocess.run(
+            ['nvidia-smi', '--query-gpu=memory.used,memory.total', '--format=csv,noheader,nounits'],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            line = result.stdout.strip().split('\n')[0]
+            used, total = [int(x.strip()) for x in line.split(',')]
+            return round(used / 1024, 1), round(total / 1024, 1)
+    except (FileNotFoundError, subprocess.TimeoutExpired, ValueError):
+        pass
+    return 0, 0
 
 
 RECOMMENDED_MODELS = [
@@ -467,6 +497,10 @@ QCheckBox::indicator:checked {
 CHAT_HTML_TEMPLATE = """<!DOCTYPE html>
 <html>
 <head>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@9.4.3/dist/mermaid.min.js"></script>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html { scroll-behavior: smooth; }
@@ -751,6 +785,56 @@ hr { border: none; border-top: 1px solid #3e3e3e; margin: 16px 0; }
 #scroll-to-bottom:hover {
     background: #1a8ae8;
 }
+.bookmarked {
+    border-left: 3px solid #ffc107 !important;
+}
+.raw-content {
+    white-space: pre-wrap;
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 13px;
+    color: #aaa;
+}
+.mermaid {
+    background: #1a1a1a;
+    border-radius: 8px;
+    padding: 16px;
+    margin: 10px 0;
+    text-align: center;
+}
+.mermaid svg {
+    max-width: 100%;
+}
+.run-btn {
+    background: #2ea043;
+    color: white;
+    border: none;
+    padding: 2px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 11px;
+    margin-left: 8px;
+}
+.run-btn:hover {
+    background: #3fb950;
+}
+.code-output {
+    background: #0d1117;
+    border: 1px solid #3e3e3e;
+    border-top: none;
+    border-radius: 0 0 8px 8px;
+    padding: 10px 14px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: #8b949e;
+    white-space: pre-wrap;
+    max-height: 300px;
+    overflow-y: auto;
+}
+.code-output .output-header {
+    color: #58a6ff;
+    font-weight: bold;
+    margin-bottom: 4px;
+}
 PYGMENTS_CSS
 </style>
 </head>
@@ -803,6 +887,45 @@ function clearStreaming() {
     document.getElementById('streaming-text').innerHTML = '';
     document.getElementById('streaming-content').style.display = 'none';
 }
+function toggleRaw(idx) {
+    var rendered = document.getElementById('rendered-' + idx);
+    var raw = document.getElementById('raw-' + idx);
+    var btn = document.getElementById('rawbtn-' + idx);
+    if (!rendered || !raw || !btn) return;
+    if (raw.style.display === 'none') {
+        raw.style.display = 'block';
+        rendered.style.display = 'none';
+        btn.textContent = 'Rendered';
+    } else {
+        raw.style.display = 'none';
+        rendered.style.display = 'block';
+        btn.textContent = 'Raw';
+    }
+}
+function initPage() {
+    if (typeof mermaid !== 'undefined') {
+        mermaid.initialize({startOnLoad: false, theme: 'dark', securityLevel: 'loose'});
+        try {
+            document.querySelectorAll('.mermaid').forEach(function(el) {
+                if (!el.getAttribute('data-processed')) {
+                    mermaid.init(undefined, el);
+                }
+            });
+        } catch(e) { console.log('mermaid error:', e); }
+    }
+    if (typeof renderMathInElement !== 'undefined') {
+        renderMathInElement(document.body, {
+            delimiters: [
+                {left: '$$', right: '$$', display: true},
+                {left: '$', right: '$', display: false},
+                {left: '\\\\(', right: '\\\\)', display: false},
+                {left: '\\\\[', right: '\\\\]', display: true}
+            ],
+            throwOnError: false
+        });
+    }
+}
+window.addEventListener('load', initPage);
 window.scrollTo(0, document.body.scrollHeight);
 </script>
 </body>
@@ -827,6 +950,7 @@ class ConversationStore:
                         "updated_at": data.get("updated_at", ""),
                         "model": data.get("model", DEFAULT_MODEL),
                         "pinned": data.get("pinned", False),
+                        "tags": data.get("tags", []),
                     })
             except (json.JSONDecodeError, KeyError):
                 continue
@@ -860,6 +984,10 @@ class ConversationStore:
         results = []
         for c in self.list_conversations():
             if query in c["title"].lower():
+                results.append(c)
+                continue
+            tags = c.get("tags", [])
+            if any(query.lstrip("#") in t.lower() for t in tags):
                 results.append(c)
                 continue
             full = self.load(c["id"])
@@ -1192,6 +1320,24 @@ class DeleteModelWorker(QThread):
             self.delete_complete.emit(False, str(e))
 
 
+class GpuMonitor(QThread):
+    usage_updated = pyqtSignal(float, float)
+
+    def __init__(self):
+        super().__init__()
+        self._running = True
+
+    def run(self):
+        while self._running:
+            used, total = get_gpu_vram_usage()
+            if total > 0:
+                self.usage_updated.emit(used, total)
+            self.sleep(5)
+
+    def stop(self):
+        self._running = False
+
+
 # --- Chat Renderer ---
 
 class ChatRenderer:
@@ -1203,9 +1349,11 @@ class ChatRenderer:
         ])
         self.font_size = 15
 
-    def render_markdown(self, text):
+    def render_markdown(self, text, code_block_offset=0):
         self.md.reset()
         html = self.md.convert(text)
+
+        self._code_idx = code_block_offset
 
         def add_code_header(match):
             lang = ""
@@ -1213,8 +1361,22 @@ class ChatRenderer:
             if lang_match:
                 lang = lang_match.group(1)
             code_content = match.group(0)
+
+            if lang.lower() == 'mermaid':
+                inner = re.search(r'<code[^>]*>(.*?)</code>', code_content, re.DOTALL)
+                if inner:
+                    mermaid_src = html_module.unescape(inner.group(1))
+                    return f'<div class="mermaid">{mermaid_src}</div>'
+
+            run_html = ""
+            if lang.lower() in ('python', 'python3', 'py'):
+                run_html = f'<button class="run-btn" onclick="window.location.href=\'action://runcode/{self._code_idx}\'">Run</button>'
+                self._code_idx += 1
+            else:
+                self._code_idx += 1
+
             return (f'<pre><div class="code-header"><span>{lang}</span>'
-                    f'<button onclick="copyCode(this)">Copy</button></div>'
+                    f'<button onclick="copyCode(this)">Copy</button>{run_html}</div>'
                     f'{code_content[4:]}')
 
         html = re.sub(r'<pre><code[^>]*>.*?</code></pre>', add_code_header, html, flags=re.DOTALL)
@@ -1236,12 +1398,16 @@ class ChatRenderer:
                 '<kbd>Ctrl+=</kbd> Zoom In &nbsp; '
                 '<kbd>Ctrl+-</kbd> Zoom Out &nbsp; '
                 '<kbd>Ctrl+0</kbd> Reset Zoom &nbsp; '
-                '<kbd>Ctrl+L</kbd> Focus Input'
+                '<kbd>Ctrl+L</kbd> Focus Input<br>'
+                '<kbd>Ctrl+F</kbd> Search &nbsp; '
+                '<kbd>Ctrl+T</kbd> Templates &nbsp; '
+                '<kbd>Ctrl+Up/Down</kbd> Switch Model'
                 '</div>'
                 '<div class="slash-hint">'
                 'Slash commands: '
                 '<code>/clear</code> <code>/model name</code> <code>/system prompt</code> '
-                '<code>/export</code> <code>/stats</code> <code>/pull name</code> <code>/help</code>'
+                '<code>/export</code> <code>/stats</code> <code>/pull name</code> '
+                '<code>/templates</code> <code>/manage</code> <code>/help</code>'
                 '</div>'
                 '</div>'
             )
@@ -1268,17 +1434,37 @@ class ChatRenderer:
                     for af in msg["attached_files"]:
                         files_html += f'<div class="file-attachment"><span class="filename">{af["name"]}</span></div>'
 
+                is_bookmarked = msg.get("bookmarked", False)
+                bookmark_class = " bookmarked" if is_bookmarked else ""
+                bookmark_label = "Unbookmark" if is_bookmarked else "Bookmark"
+
                 if role == "user":
                     rendered = content.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
                     rendered = rendered.replace("\n", "<br>")
-                    actions = f'<span class="message-actions"><a href="action://edit/{idx}">Edit</a></span>'
+                    actions = (
+                        f'<span class="message-actions">'
+                        f'<a href="action://edit/{idx}">Edit</a>'
+                        f'<a href="action://bookmark/{idx}">{bookmark_label}</a>'
+                        f'</span>'
+                    )
                 else:
                     rendered = self.render_markdown(content)
+                    raw_escaped = content.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                    rendered = (
+                        f'<div id="rendered-{idx}">{rendered}</div>'
+                        f'<div id="raw-{idx}" class="raw-content" style="display:none">{raw_escaped}</div>'
+                    )
+                    continue_html = ""
+                    if idx == len(messages) - 1:
+                        continue_html = f'<a href="action://continue/{idx}">Continue</a>'
                     actions = (
                         f'<span class="message-actions">'
                         f'<a href="action://copy/{idx}">Copy</a>'
                         f'<a href="action://regenerate/{idx}">Regenerate</a>'
                         f'<a href="action://retrywith/{idx}">Retry with...</a>'
+                        f'<button id="rawbtn-{idx}" onclick="toggleRaw({idx})">Raw</button>'
+                        f'<a href="action://bookmark/{idx}">{bookmark_label}</a>'
+                        f'{continue_html}'
                         f'</span>'
                     )
 
@@ -1295,7 +1481,7 @@ class ChatRenderer:
                     meta = f'<div class="message-meta">{" \u00b7 ".join(parts)}</div>'
 
                 msgs_html += (
-                    f'<div class="message {css_class}">'
+                    f'<div class="message {css_class}{bookmark_class}">'
                     f'<div class="message-header"><span>{header}{time_html}</span>{actions}</div>'
                     f'{images_html}{files_html}{rendered}{meta}</div>\n'
                 )
@@ -1695,6 +1881,200 @@ class ConvStatsDialog(QDialog):
         layout.addWidget(close_btn)
 
 
+class ManageConversationsDialog(QDialog):
+    conversations_deleted = pyqtSignal()
+
+    def __init__(self, parent, store):
+        super().__init__(parent)
+        self.setWindowTitle("Manage Conversations")
+        self.setMinimumSize(500, 500)
+        self.store = store
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Select conversations to delete:"))
+
+        self.list_widget = QListWidget()
+        self.list_widget.setSelectionMode(QListWidget.MultiSelection)
+        convos = store.list_conversations()
+        for c in convos:
+            item = QListWidgetItem(f"{c['title']}  ({c.get('updated_at', '')[:10]})")
+            item.setData(Qt.UserRole, c["id"])
+            self.list_widget.addItem(item)
+        layout.addWidget(self.list_widget)
+
+        btn_row = QHBoxLayout()
+        self.select_all_btn = QPushButton("Select All")
+        self.select_all_btn.clicked.connect(self.list_widget.selectAll)
+        btn_row.addWidget(self.select_all_btn)
+
+        self.deselect_btn = QPushButton("Deselect All")
+        self.deselect_btn.clicked.connect(self.list_widget.clearSelection)
+        btn_row.addWidget(self.deselect_btn)
+        btn_row.addStretch()
+
+        self.delete_btn = QPushButton("Delete Selected")
+        self.delete_btn.setObjectName("dangerBtn")
+        self.delete_btn.clicked.connect(self._delete_selected)
+        btn_row.addWidget(self.delete_btn)
+        layout.addLayout(btn_row)
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        layout.addWidget(close_btn)
+
+    def _delete_selected(self):
+        selected = self.list_widget.selectedItems()
+        if not selected:
+            return
+        reply = QMessageBox.question(
+            self, "Bulk Delete",
+            f"Delete {len(selected)} conversation(s)? This cannot be undone.",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+        for item in selected:
+            conv_id = item.data(Qt.UserRole)
+            self.store.delete(conv_id)
+        for item in selected:
+            self.list_widget.takeItem(self.list_widget.row(item))
+        self.conversations_deleted.emit()
+
+
+class PromptTemplateDialog(QDialog):
+    template_selected = pyqtSignal(str)
+
+    def __init__(self, parent, templates=None):
+        super().__init__(parent)
+        self.setWindowTitle("Prompt Templates")
+        self.setMinimumWidth(450)
+        self.templates = templates or dict(DEFAULT_PROMPT_TEMPLATES)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Select a template to insert:"))
+
+        self.list_widget = QListWidget()
+        for name in sorted(self.templates.keys()):
+            item = QListWidgetItem(name)
+            item.setToolTip(self.templates[name][:100] + "..." if len(self.templates[name]) > 100 else self.templates[name])
+            self.list_widget.addItem(item)
+        self.list_widget.itemDoubleClicked.connect(self._select)
+        layout.addWidget(self.list_widget)
+
+        self.preview = QPlainTextEdit()
+        self.preview.setReadOnly(True)
+        self.preview.setMaximumHeight(100)
+        self.preview.setPlaceholderText("Select a template to preview...")
+        self.list_widget.currentItemChanged.connect(
+            lambda cur, _: self.preview.setPlainText(self.templates.get(cur.text(), "")) if cur else None
+        )
+        layout.addWidget(self.preview)
+
+        btn_row = QHBoxLayout()
+        insert_btn = QPushButton("Insert")
+        insert_btn.clicked.connect(self._select_current)
+        btn_row.addWidget(insert_btn)
+
+        add_btn = QPushButton("Add Template")
+        add_btn.clicked.connect(self._add_template)
+        btn_row.addWidget(add_btn)
+
+        del_btn = QPushButton("Delete")
+        del_btn.setObjectName("dangerBtn")
+        del_btn.clicked.connect(self._delete_template)
+        btn_row.addWidget(del_btn)
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(cancel_btn)
+        layout.addLayout(btn_row)
+
+    def _select(self, item):
+        if item and item.text() in self.templates:
+            self.template_selected.emit(self.templates[item.text()])
+            self.accept()
+
+    def _select_current(self):
+        item = self.list_widget.currentItem()
+        if item:
+            self._select(item)
+
+    def _add_template(self):
+        name, ok = QInputDialog.getText(self, "Add Template", "Template name:")
+        if ok and name.strip():
+            text, ok2 = QInputDialog.getMultiLineText(self, "Template Content", "Enter template text:")
+            if ok2 and text.strip():
+                self.templates[name.strip()] = text
+                self.list_widget.addItem(name.strip())
+
+    def _delete_template(self):
+        item = self.list_widget.currentItem()
+        if item and item.text() in self.templates:
+            del self.templates[item.text()]
+            self.list_widget.takeItem(self.list_widget.row(item))
+
+    def get_templates(self):
+        return self.templates
+
+
+class SearchBar(QWidget):
+    def __init__(self, page, parent=None):
+        super().__init__(parent)
+        self.page = page
+        self.setStyleSheet("background-color: #252526; border-bottom: 1px solid #3e3e3e;")
+        self.setFixedHeight(36)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 2, 8, 2)
+
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Find in conversation...")
+        self.search_input.returnPressed.connect(self._find_next)
+        self.search_input.textChanged.connect(self._on_text_changed)
+        layout.addWidget(self.search_input, 1)
+
+        prev_btn = QPushButton("<")
+        prev_btn.setFixedWidth(28)
+        prev_btn.clicked.connect(self._find_prev)
+        layout.addWidget(prev_btn)
+
+        next_btn = QPushButton(">")
+        next_btn.setFixedWidth(28)
+        next_btn.clicked.connect(self._find_next)
+        layout.addWidget(next_btn)
+
+        close_btn = QPushButton("x")
+        close_btn.setFixedWidth(28)
+        close_btn.clicked.connect(self._close)
+        layout.addWidget(close_btn)
+
+        self.hide()
+
+    def show_bar(self):
+        self.show()
+        self.search_input.setFocus()
+        self.search_input.selectAll()
+
+    def _close(self):
+        self.page.findText("")
+        self.hide()
+
+    def _on_text_changed(self, text):
+        if text:
+            self.page.findText(text)
+        else:
+            self.page.findText("")
+
+    def _find_next(self):
+        text = self.search_input.text()
+        if text:
+            self.page.findText(text)
+
+    def _find_prev(self):
+        text = self.search_input.text()
+        if text:
+            self.page.findText(text, QWebEnginePage.FindBackward)
+
+
 # --- Input Widget ---
 
 class InputWidget(QWidget):
@@ -1748,6 +2128,12 @@ class InputWidget(QWidget):
         input_row.addWidget(self.stop_btn, alignment=Qt.AlignBottom)
 
         outer_layout.addLayout(input_row)
+
+        self.char_count_label = QLabel("0 chars | 0 words")
+        self.char_count_label.setStyleSheet("color: #555; font-size: 10px; padding-left: 48px;")
+        self.text_edit.textChanged.connect(self._update_char_count)
+        outer_layout.addWidget(self.char_count_label)
+
         self.setAcceptDrops(True)
 
     def _auto_resize(self):
@@ -1756,6 +2142,12 @@ class InputWidget(QWidget):
         line_height = self.text_edit.fontMetrics().lineSpacing()
         new_height = min(150, max(44, line_count * line_height + 20))
         self.text_edit.setFixedHeight(new_height)
+
+    def _update_char_count(self):
+        text = self.text_edit.toPlainText()
+        chars = len(text)
+        words = len(text.split()) if text.strip() else 0
+        self.char_count_label.setText(f"{chars} chars | {words} words")
 
     def _submit(self):
         text = self.text_edit.toPlainText().strip()
@@ -1991,6 +2383,9 @@ class SidebarWidget(QWidget):
         rel = relative_time(c.get("updated_at", ""))
         prefix = "[*] " if is_pinned else ""
         display = f"{prefix}{c['title']}"
+        tags = c.get("tags", [])
+        if tags:
+            display += f"  [{', '.join('#' + t for t in tags[:3])}]"
         if rel:
             display += f"  \u00b7  {rel}"
         item = QListWidgetItem(display)
@@ -2040,6 +2435,8 @@ class SidebarWidget(QWidget):
         menu = QMenu(self)
         pin_action = menu.addAction("Unpin" if is_pinned else "Pin")
         rename_action = menu.addAction("Rename")
+        duplicate_action = menu.addAction("Duplicate")
+        tags_action = menu.addAction("Edit Tags")
         delete_action = menu.addAction("Delete")
         menu.addSeparator()
         export_md_action = menu.addAction("Export as Markdown")
@@ -2061,6 +2458,31 @@ class SidebarWidget(QWidget):
                 conv = self.store.load(conv_id)
                 if conv:
                     conv["title"] = new_name.strip()
+                    self.store.save(conv)
+                    self.refresh(select_id=conv_id)
+
+        elif action == duplicate_action:
+            conv = self.store.load(conv_id)
+            if conv:
+                import copy
+                new_conv = copy.deepcopy(conv)
+                new_conv["id"] = str(uuid.uuid4())
+                new_conv["title"] = conv.get("title", "Untitled") + " (copy)"
+                new_conv["updated_at"] = datetime.now().isoformat()
+                self.store.save(new_conv)
+                self.refresh(select_id=new_conv["id"])
+                self.conversation_selected.emit(new_conv["id"])
+
+        elif action == tags_action:
+            conv = self.store.load(conv_id)
+            if conv:
+                current_tags = ", ".join(conv.get("tags", []))
+                new_tags, ok = QInputDialog.getText(
+                    self, "Edit Tags", "Tags (comma-separated):", text=current_tags
+                )
+                if ok:
+                    tags = [t.strip().lstrip("#") for t in new_tags.split(",") if t.strip()]
+                    conv["tags"] = tags
                     self.store.save(conv)
                     self.refresh(select_id=conv_id)
 
@@ -2141,6 +2563,8 @@ class MainWindow(QMainWindow):
         self._title_worker = None
         self._streaming_text = ""
         self._streaming_dirty = False
+        self._streaming_start_time = 0
+        self._streaming_token_count = 0
         self._connected = False
         self._model_info = {}
         self._zoom = self.settings_data.get("zoom", 100)
@@ -2153,10 +2577,18 @@ class MainWindow(QMainWindow):
         self._restore_geometry()
         self._new_chat()
         self._start_connection_checker()
+        self._start_gpu_monitor()
 
         self._stream_timer = QTimer()
         self._stream_timer.setInterval(200)
         self._stream_timer.timeout.connect(self._update_streaming_display)
+
+        self._draft_timer = QTimer()
+        self._draft_timer.setInterval(5000)
+        self._draft_timer.timeout.connect(self._save_draft)
+        self._draft_timer.start()
+
+        self._restore_draft()
 
     def _build_ui(self):
         central = QWidget()
@@ -2187,7 +2619,7 @@ class MainWindow(QMainWindow):
         top_layout = QHBoxLayout(top_bar)
         top_layout.setContentsMargins(16, 0, 16, 0)
 
-        self.title_label = QLabel("New Chat")
+        self.title_label = QLabel(APP_NAME)
         self.title_label.setObjectName("titleLabel")
         top_layout.addWidget(self.title_label)
 
@@ -2201,6 +2633,11 @@ class MainWindow(QMainWindow):
         self.gear_btn.setObjectName("gearBtn")
         self.gear_btn.setToolTip("Settings")
         top_layout.addWidget(self.gear_btn)
+
+        self.manage_btn = QPushButton("\u2261")
+        self.manage_btn.setObjectName("gearBtn")
+        self.manage_btn.setToolTip("Manage conversations (bulk delete)")
+        top_layout.addWidget(self.manage_btn)
 
         self.models_btn = QPushButton("\u2193")
         self.models_btn.setObjectName("gearBtn")
@@ -2226,9 +2663,16 @@ class MainWindow(QMainWindow):
 
         self.chat_page = ChatPage()
         self.chat_page.setBackgroundColor(QColor("#1e1e1e"))
+        self.chat_page.settings().setAttribute(
+            QWebEngineSettings.LocalContentCanAccessRemoteUrls, True
+        )
         self.chat_view = QWebEngineView()
         self.chat_view.setPage(self.chat_page)
         self.chat_view.setStyleSheet("background-color: #1e1e1e;")
+
+        self.search_bar = SearchBar(self.chat_page)
+        main_area_layout.addWidget(self.search_bar)
+
         main_area_layout.addWidget(self.chat_view)
 
         self.input_widget = InputWidget()
@@ -2248,6 +2692,11 @@ class MainWindow(QMainWindow):
         self.status_label = QLabel(f"Model: {DEFAULT_MODEL}")
         self.status_bar.addPermanentWidget(self.status_label)
 
+        self.gpu_label = QLabel("")
+        self.gpu_label.setStyleSheet("padding: 0 8px;")
+        self.gpu_label.setToolTip("GPU VRAM usage")
+        self.status_bar.addPermanentWidget(self.gpu_label)
+
         self.zoom_label = QLabel(f"{self._zoom}%")
         self.zoom_label.setStyleSheet("padding: 0 8px;")
         self.status_bar.addPermanentWidget(self.zoom_label)
@@ -2262,6 +2711,7 @@ class MainWindow(QMainWindow):
         self.input_widget.stop_btn.clicked.connect(self._stop_generation)
         self.system_prompt_btn.clicked.connect(self._edit_system_prompt)
         self.gear_btn.clicked.connect(self._open_settings)
+        self.manage_btn.clicked.connect(self._manage_conversations)
         self.models_btn.clicked.connect(self._open_model_management)
         self.model_combo.currentTextChanged.connect(self._on_model_changed)
         self.chat_page.action_requested.connect(self._on_chat_action)
@@ -2276,6 +2726,11 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+="), self, self._zoom_in)
         QShortcut(QKeySequence("Ctrl+-"), self, self._zoom_out)
         QShortcut(QKeySequence("Ctrl+0"), self, self._zoom_reset)
+        QShortcut(QKeySequence("Ctrl+F"), self, self._toggle_search)
+        QShortcut(QKeySequence("Ctrl+Up"), self, self._model_prev)
+        QShortcut(QKeySequence("Ctrl+Down"), self, self._model_next)
+        QShortcut(QKeySequence("Ctrl+T"), self, self._show_templates)
+        QShortcut(QKeySequence("Escape"), self, self._escape_handler)
 
     def _start_connection_checker(self):
         self._conn_checker = ConnectionChecker()
@@ -2377,7 +2832,7 @@ class MainWindow(QMainWindow):
         model = self.model_combo.currentText() or DEFAULT_MODEL
         system_prompt = self.settings_data.get("system_prompt", DEFAULT_SYSTEM_PROMPT)
         self.current_conv = new_conversation(model, system_prompt)
-        self.title_label.setText("New Chat")
+        self.title_label.setText(APP_NAME)
         self._render_chat()
         self._update_context_bar()
         self.input_widget.focus_input()
@@ -2470,6 +2925,8 @@ class MainWindow(QMainWindow):
 
         self._streaming_text = ""
         self._streaming_dirty = False
+        self._streaming_start_time = time.time()
+        self._streaming_token_count = 0
 
         model = self.model_combo.currentText() or DEFAULT_MODEL
         self.current_conv["model"] = model
@@ -2532,14 +2989,21 @@ class MainWindow(QMainWindow):
             else:
                 self.status_label.setText("Usage: /pull model_name")
 
+        elif cmd == "/templates":
+            self._show_templates()
+
+        elif cmd == "/manage":
+            self._manage_conversations()
+
         elif cmd == "/help":
-            self.status_label.setText("/clear /model /system /export /stats /pull /help")
+            self.status_label.setText("/clear /model /system /export /stats /pull /templates /manage /help")
 
         else:
             self.status_label.setText(f"Unknown command: {cmd}. Try /help")
 
     def _on_token(self, token):
         self._streaming_text += token
+        self._streaming_token_count += 1
         self._streaming_dirty = True
 
     def _update_streaming_display(self):
@@ -2557,6 +3021,13 @@ class MainWindow(QMainWindow):
             )
         except Exception:
             pass
+
+        elapsed = time.time() - self._streaming_start_time
+        if elapsed > 0.5 and self._streaming_token_count > 0:
+            tps = self._streaming_token_count / elapsed
+            self.status_label.setText(
+                f"Generating... {self._streaming_token_count} tokens | {tps:.1f} tok/s"
+            )
 
     def _on_response_done(self, full_text, stats):
         self._stream_timer.stop()
@@ -2678,7 +3149,6 @@ class MainWindow(QMainWindow):
                     self.current_conv["messages"] = messages[:index]
                     self.store.save(self.current_conv)
                     self._render_chat()
-                    old_model = self.model_combo.currentText()
                     self.model_combo.blockSignals(True)
                     idx = self.model_combo.findText(model)
                     if idx >= 0:
@@ -2690,6 +3160,20 @@ class MainWindow(QMainWindow):
                             self.current_conv["messages"].pop()
                             images = last_user.get("images")
                             self._send_message(last_user["content"], images if images else None)
+
+        elif action == "bookmark":
+            messages[index]["bookmarked"] = not messages[index].get("bookmarked", False)
+            self.store.save(self.current_conv)
+            self._render_chat()
+            state = "bookmarked" if messages[index]["bookmarked"] else "removed bookmark"
+            self.status_label.setText(f"Message {state}")
+
+        elif action == "continue":
+            if messages[index]["role"] == "assistant":
+                self._send_message("Continue from where you left off.")
+
+        elif action == "runcode":
+            self._execute_code_block(index)
 
     def _edit_system_prompt(self):
         current = ""
@@ -2810,6 +3294,136 @@ class MainWindow(QMainWindow):
         save_settings(self.settings_data)
         self._render_chat()
 
+    def _start_gpu_monitor(self):
+        self._gpu_monitor = GpuMonitor()
+        self._gpu_monitor.usage_updated.connect(self._on_gpu_update)
+        self._gpu_monitor.start()
+
+    def _on_gpu_update(self, used, total):
+        pct = int(used / total * 100) if total > 0 else 0
+        self.gpu_label.setText(f"GPU: {used:.1f}/{total:.0f} GB ({pct}%)")
+        if pct > 85:
+            self.gpu_label.setStyleSheet("padding: 0 8px; color: #ff8888;")
+        elif pct > 60:
+            self.gpu_label.setStyleSheet("padding: 0 8px; color: #ffaa44;")
+        else:
+            self.gpu_label.setStyleSheet("padding: 0 8px;")
+
+    def _toggle_search(self):
+        if self.search_bar.isVisible():
+            self.search_bar._close()
+        else:
+            self.search_bar.show_bar()
+
+    def _escape_handler(self):
+        if self.search_bar.isVisible():
+            self.search_bar._close()
+
+    def _model_prev(self):
+        idx = self.model_combo.currentIndex()
+        if idx > 0:
+            self.model_combo.setCurrentIndex(idx - 1)
+
+    def _model_next(self):
+        idx = self.model_combo.currentIndex()
+        if idx < self.model_combo.count() - 1:
+            self.model_combo.setCurrentIndex(idx + 1)
+
+    def _show_templates(self):
+        templates = self.settings_data.get("prompt_templates", dict(DEFAULT_PROMPT_TEMPLATES))
+        dialog = PromptTemplateDialog(self, templates)
+        dialog.template_selected.connect(self._insert_template)
+        result = dialog.exec_()
+        self.settings_data["prompt_templates"] = dialog.get_templates()
+        save_settings(self.settings_data)
+
+    def _insert_template(self, text):
+        cursor = self.input_widget.text_edit.textCursor()
+        cursor.insertText(text)
+        self.input_widget.text_edit.setFocus()
+
+    def _manage_conversations(self):
+        dialog = ManageConversationsDialog(self, self.store)
+        dialog.conversations_deleted.connect(self._on_bulk_delete)
+        dialog.exec_()
+
+    def _on_bulk_delete(self):
+        self.sidebar.refresh()
+        self._new_chat()
+
+    def _save_draft(self):
+        text = self.input_widget.text_edit.toPlainText()
+        conv_id = self.current_conv["id"] if self.current_conv else ""
+        if text.strip():
+            try:
+                draft = {"text": text, "conv_id": conv_id}
+                with open(DRAFT_FILE, "w") as f:
+                    json.dump(draft, f)
+            except OSError:
+                pass
+        elif DRAFT_FILE.exists():
+            try:
+                DRAFT_FILE.unlink()
+            except OSError:
+                pass
+
+    def _restore_draft(self):
+        if DRAFT_FILE.exists():
+            try:
+                with open(DRAFT_FILE) as f:
+                    draft = json.load(f)
+                text = draft.get("text", "")
+                if text.strip():
+                    self.input_widget.text_edit.setPlainText(text)
+            except (json.JSONDecodeError, OSError):
+                pass
+
+    def _execute_code_block(self, code_block_index):
+        if not self.current_conv:
+            return
+        messages = self.current_conv.get("messages", [])
+        code_blocks = []
+        for msg in messages:
+            if msg["role"] == "assistant":
+                blocks = re.findall(
+                    r'```(?:python|python3|py)\n(.*?)```',
+                    msg["content"], re.DOTALL
+                )
+                code_blocks.extend(blocks)
+
+        if code_block_index < 0 or code_block_index >= len(code_blocks):
+            self.status_label.setText("Code block not found")
+            return
+
+        code = code_blocks[code_block_index]
+        reply = QMessageBox.question(
+            self, "Run Python Code",
+            f"Execute this code?\n\n{code[:200]}{'...' if len(code) > 200 else ''}",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        try:
+            result = subprocess.run(
+                ['python3', '-c', code],
+                capture_output=True, text=True, timeout=30,
+                cwd=str(Path.home())
+            )
+            output = result.stdout
+            if result.stderr:
+                output += "\n" + result.stderr if output else result.stderr
+            if not output.strip():
+                output = "(no output)"
+            QMessageBox.information(
+                self, "Code Output",
+                f"Exit code: {result.returncode}\n\n{output[:2000]}"
+            )
+        except subprocess.TimeoutExpired:
+            QMessageBox.warning(self, "Timeout", "Code execution timed out (30s limit)")
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to run code: {e}")
+
     def _restore_geometry(self):
         settings = QSettings(APP_NAME, APP_NAME)
         geom = settings.value("geometry")
@@ -2825,9 +3439,15 @@ class MainWindow(QMainWindow):
         settings.setValue("windowState", self.saveState())
         if self.current_conv and self.current_conv.get("messages"):
             self.store.save(self.current_conv)
+        self._save_draft()
         if hasattr(self, '_conn_checker'):
             self._conn_checker.stop()
             self._conn_checker.wait(2000)
+        if hasattr(self, '_gpu_monitor'):
+            self._gpu_monitor.stop()
+            self._gpu_monitor.wait(2000)
+        if hasattr(self, '_draft_timer'):
+            self._draft_timer.stop()
         super().closeEvent(event)
 
 
