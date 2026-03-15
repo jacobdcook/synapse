@@ -16,64 +16,82 @@ Most local LLM interfaces are either terminal-only or bloated Electron apps. Syn
 | Feature | Terminal (`ollama run`) | Synapse |
 |---|---|---|
 | Conversation history | Per-session only | Persistent across sessions |
-| Multiple conversations | No | Sidebar with search + pinning |
+| Multiple conversations | No | Tabbed chats + sidebar with search |
 | Model switching | Restart required | Dropdown + auto VRAM unload |
 | Markdown / code blocks | Raw text | Live-rendered with syntax highlighting |
 | Image support | No | Multimodal (paste, drag-drop, file picker) |
 | System prompts | Manual prefix | Presets + per-conversation editor |
+| Tool use | No | Built-in tools + MCP server support |
 | Model management | Terminal commands | Pull, delete, VRAM-aware recommendations |
-| Generation controls | Hardcoded | Temperature, Top P, context length |
-| Export | No | Markdown, HTML, JSON |
+| Workspace | No | File browser, editor, terminal, git panel |
 
 ## Features
 
 ### Core Chat
 - **Multi-Model Support** — Switch between any Ollama model from a dropdown. Synapse automatically unloads the previous model from VRAM before loading the new one.
-- **Streaming Markdown** — Responses render markdown live during streaming, not just after completion. Code blocks, tables, and formatting appear in real-time.
-- **Edit & Regenerate** — Click to edit any sent message or regenerate any response. "Retry with..." lets you regenerate using a different model.
+- **Streaming Markdown** — Responses render markdown live during streaming. Code blocks, tables, and formatting appear in real-time.
+- **Edit & Regenerate** — Edit any sent message or regenerate any response. "Retry with..." regenerates using a different model.
+- **Tabbed Conversations** — Open multiple chats in tabs, drag to reorder.
 - **Auto-Title** — Conversations are automatically titled by the model after the first exchange.
-- **System Prompt Presets** — Built-in presets (Coder, Creative Writer, Concise, Analyst) plus save/load custom presets.
+- **Type While Streaming** — Queue your next message while the model is still generating.
+
+### Tool Use & MCP
+- **Built-in Tools** — File read/write, command execution, web search — the model can use tools to accomplish tasks.
+- **MCP (Model Context Protocol)** — Connect external tool servers (GitHub, filesystem, databases) via the MCP standard. Configure servers in Settings > MCP Servers.
+- **Tool Approval** — Review and approve/reject each tool call, or enable auto-execute for trusted workflows.
+- **Three-tier Dispatch** — Built-in tools > plugins > MCP servers, with automatic routing.
+
+### Workspace
+- **File Browser** — Browse and open project files from the sidebar.
+- **Built-in Editor** — Edit files with syntax highlighting directly in Synapse.
+- **Integrated Terminal** — Run commands without leaving the app.
+- **Git Panel** — View status, stage files, commit, and push.
+- **Workspace Search** — Full-text search across your project files.
+- **RAG Context** — Workspace files are automatically indexed and injected as context when relevant.
 
 ### Multimodal
-- **Image Attachment** — Attach images via file picker, drag-and-drop, or Ctrl+V paste from clipboard. Works with vision models (LLaVA, Llama 3.2 Vision).
-- **Text File Context** — Drag .py, .js, .md, or any text file into the chat. Contents are injected as context with the message.
+- **Image Attachment** — Attach images via file picker, drag-and-drop, or Ctrl+V paste from clipboard.
+- **Text File Context** — Drag .py, .js, .md, or any text file into the chat. Contents are injected as context.
 
 ### Model Management
 - **Pull Models** — Download new models from within the app with a live progress bar.
 - **Delete Models** — Remove models you don't use.
-- **VRAM-Aware Recommendations** — Detects your GPU VRAM (via nvidia-smi) and shows a curated list of models that will fit. Color-coded: green = installed, orange = tight fit.
-- **Model Info Tooltips** — Hover any model in the dropdown to see parameter count, quantization level, and family.
+- **VRAM-Aware Recommendations** — Detects your GPU VRAM and shows models that will fit, color-coded by availability.
 
 ### Organization
-- **Pin Conversations** — Pin important chats to the top of the sidebar.
-- **Conversation Search** — Search across all conversations by title or message content.
-- **Conversation Stats** — View total messages, tokens generated, throughput, and context usage.
+- **Pin & Bookmark** — Pin conversations to the top, bookmark individual messages.
+- **Conversation Search** — Search across all conversations by title or content.
+- **Compare Mode** — Compare two conversations side-by-side.
 - **Import/Export** — Import JSON conversations. Export as Markdown or self-contained HTML.
-- **Relative Timestamps** — Sidebar shows "2h ago", "Yesterday", etc.
-- **Double-Click Rename** — Double-click any sidebar item to rename it.
+- **Command Palette** — Ctrl+Shift+P to quickly access any action.
 
 ### Power User
-- **Generation Parameters** — Temperature, Top P, and context length controls via settings dialog.
-- **Context Window Bar** — Visual indicator showing estimated context usage. Changes color as you approach the limit.
+- **Slash Commands** — `/clear`, `/model`, `/system`, `/export`, `/stats`, `/pull`, `/mcp`, `/help` and more.
+- **Generation Parameters** — Temperature, Top P, context length, repeat penalty.
+- **System Prompt Presets** — Built-in presets (Coder, Creative Writer, Concise, Analyst) plus custom presets.
 - **Remote Ollama** — Connect to Ollama on another machine by configuring the server URL.
-- **Notification Sound** — Optional sound when a response finishes and the window isn't focused.
-- **Zoom Controls** — Ctrl+=/- to zoom the chat view in/out.
-- **Slash Commands** — `/clear`, `/model`, `/system`, `/export`, `/stats`, `/pull`, `/help` typed directly in the input.
+- **Notification Sound** — Optional notification when a response finishes and the window isn't focused.
+- **Zoom Controls** — Ctrl+=/- to zoom the chat view.
 
-### UI
-- **Dark Theme** — VS Code-inspired dark UI.
-- **Auto-Scroll Lock** — Scroll up during streaming to read without being yanked to the bottom. A floating button appears to jump back down.
-- **Message Timestamps** — Each message shows the time it was sent.
-- **Copy Response** — Hover any assistant message to copy the full response. Code blocks have individual copy buttons.
-- **Token/s Display** — Throughput shown in the status bar and per-message metadata.
-- **Connection Indicator** — Green/red dot showing Ollama connection status.
+## Primary Models
+
+These are the models I primarily use with Synapse on an RTX 4090 (24GB VRAM):
+
+| Model | Parameters | Use Case | Tool Support |
+|---|---|---|---|
+| `huihui_ai/qwen3.5-abliterated:27b-Claude` | 27B | Primary — uncensored, coding + general chat | Yes |
+| `huihui_ai/qwen3-coder-abliterated` | 30B | Coding-focused alternative | No |
+| `qwen2.5:32b` | 32B | High-quality general purpose | Yes |
+| `gemma3:27b` | 27B | Google, strong general reasoning | No |
+
+Synapse works with **any** Ollama model. The built-in model manager recommends models based on your GPU VRAM.
 
 ## Quick Start
 
 ### Prerequisites
 
 - Python 3.10+
-- [Ollama](https://ollama.com) installed and running with at least one model pulled
+- [Ollama](https://ollama.com) installed and running (`ollama serve`)
 - PyQt5 and PyQtWebEngine
 
 ### Install & Run
@@ -85,7 +103,7 @@ ollama serve
 
 git clone https://github.com/jacobdcook/synapse.git
 cd synapse
-python3 synapse.py
+python3 -m synapse
 ```
 
 ### Linux Desktop Launcher
@@ -97,28 +115,55 @@ Version=1.0
 Type=Application
 Name=Synapse
 Comment=Multi-model AI chat client for local Ollama models
-Exec=python3 /path/to/synapse/synapse.py
+Exec=python3 -m synapse
 Icon=chat
 Terminal=false
 Categories=Utility;Development;
+StartupWMClass=Synapse
 EOF
 ```
 
 ## Architecture
 
 ```
-synapse.py          # Single-file application (~2800 lines)
+synapse/
+├── __main__.py          # Entry point
+├── core/
+│   ├── api.py           # Ollama API client (streaming, tool support)
+│   ├── agent.py         # Tool registry & execution
+│   ├── mcp.py           # MCP client manager (JSON-RPC over stdio)
+│   ├── renderer.py      # HTML/CSS chat renderer
+│   ├── store.py         # Conversation persistence
+│   ├── indexer.py       # Workspace file indexer (RAG)
+│   ├── git.py           # Git operations
+│   └── plugins.py       # Plugin system
+├── ui/
+│   ├── main.py          # Main window & orchestration
+│   ├── input.py         # Chat input with completers
+│   ├── sidebar.py       # Conversation list
+│   ├── workspace.py     # File browser panel
+│   ├── editor.py        # Built-in code editor
+│   ├── terminal.py      # Integrated terminal
+│   ├── git_panel.py     # Git status/commit UI
+│   ├── settings_dialog.py  # Settings (gen params, MCP, themes)
+│   ├── command_palette.py  # Ctrl+Shift+P command palette
+│   └── ...
+├── utils/
+│   ├── constants.py     # App constants
+│   └── themes.py        # Theme definitions
+└── resources/           # Icons, sounds
+
 ~/.local/share/synapse/
-├── conversations/  # JSON files, one per conversation
-└── settings.json   # Model, gen params, presets, server URL, zoom, notifications
+├── conversations/       # JSON files, one per conversation
+└── settings.json        # All settings (model, MCP servers, gen params, etc.)
 ```
 
 **Tech stack:**
 - **PyQt5** — Native desktop widgets + QWebEngineView for chat rendering
 - **QWebEngineView** — Chromium-based view for live markdown/HTML rendering
-- **Ollama REST API** — `/api/chat` (streaming), `/api/tags` (models), `/api/show` (model info), `/api/pull` (download), `/api/delete` (remove), `/api/generate` (VRAM unload)
+- **Ollama REST API** — Streaming chat, model management, tool calling
+- **MCP** — Model Context Protocol for external tool servers
 - **Pygments** — Syntax highlighting (Monokai theme)
-- **Python `markdown`** — Fenced code, tables, smart lists
 
 ## Keyboard Shortcuts
 
@@ -127,32 +172,16 @@ synapse.py          # Single-file application (~2800 lines)
 | `Enter` | Send message |
 | `Shift+Enter` | New line |
 | `Ctrl+N` | New chat |
+| `Ctrl+T` | New tab |
+| `Ctrl+W` | Close tab |
 | `Ctrl+B` | Toggle sidebar |
-| `Ctrl+I` | Import conversation |
-| `Ctrl+Shift+C` | Copy last response |
+| `Ctrl+Shift+P` | Command palette |
 | `Ctrl+L` | Focus input |
 | `Ctrl+=` | Zoom in |
 | `Ctrl+-` | Zoom out |
 | `Ctrl+0` | Reset zoom |
 | `Ctrl+V` | Paste image from clipboard |
-
-## Supported Models
-
-Synapse works with any model available through Ollama. The built-in model manager recommends models based on your GPU VRAM. Some popular options:
-
-| Model | VRAM | Use Case |
-|---|---|---|
-| `llama3.2:3b` | 2 GB | Fast, lightweight |
-| `qwen2.5:7b` | 5 GB | Great coding + general |
-| `llama3.1:8b` | 5 GB | Very capable all-rounder |
-| `gemma2:9b` | 5 GB | Google, strong |
-| `qwen2.5:14b` | 9 GB | Excellent all-rounder |
-| `qwen2.5-coder:14b` | 9 GB | Strong coding |
-| `deepseek-r1:14b` | 9 GB | Advanced reasoning |
-| `gemma2:27b` | 16 GB | Near frontier quality |
-| `qwen2.5:32b` | 20 GB | Premium quality |
-| `deepseek-r1:32b` | 20 GB | Premium reasoning |
-| `llama3.2-vision:11b` | 8 GB | Multimodal (images) |
+| `Ctrl+Z` | Undo last file edit (tool use) |
 
 ## License
 

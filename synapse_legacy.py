@@ -9,10 +9,18 @@ import re
 import base64
 import subprocess
 import time
+import logging
 import html as html_module
 import urllib.request
 from datetime import datetime
 from pathlib import Path
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
+log = logging.getLogger("synapse")
 
 from PyQt5.QtCore import (
     Qt, QThread, pyqtSignal, QSettings, QSize, QTimer, QUrl, QMimeData,
@@ -24,9 +32,13 @@ from PyQt5.QtWidgets import (
     QComboBox, QLabel, QPlainTextEdit, QStatusBar, QMenu, QAction,
     QDialog, QDialogButtonBox, QInputDialog, QMessageBox, QSizePolicy,
     QFileDialog, QSlider, QShortcut, QFrame, QGridLayout, QCheckBox,
-    QProgressBar, QTextEdit
+    QProgressBar, QTextEdit, QTreeWidget, QTreeWidgetItem, QTabWidget,
+    QHeaderView, QStackedWidget
 )
-from PyQt5.QtGui import QFont, QIcon, QKeySequence, QColor, QPixmap, QImage
+from PyQt5.QtGui import (
+    QFont, QIcon, QKeySequence, QColor, QPixmap, QImage,
+    QSyntaxHighlighter, QTextCharFormat
+)
 from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEnginePage, QWebEngineSettings
 
 import markdown
@@ -208,6 +220,11 @@ RECOMMENDED_MODELS = [
     {"name": "deepseek-r1:7b", "size_gb": 4.7, "desc": "DeepSeek R1 7B - Reasoning model"},
     {"name": "deepseek-r1:14b", "size_gb": 9.0, "desc": "DeepSeek R1 14B - Advanced reasoning"},
     {"name": "deepseek-r1:32b", "size_gb": 19.8, "desc": "DeepSeek R1 32B - Premium reasoning"},
+    {"name": "owenarli/arli-llama3-8b-cumulus", "size_gb": 5.0, "desc": "ArliAI Llama 3 8B Cumulus - Zero refusals"},
+    {"name": "huihui_ai/qwen2.5-coder-abliterate:32b", "size_gb": 19.0, "desc": "Qwen 2.5 Coder 32B Abliterate - BEST UNCENSORED CODING"},
+    {"name": "huihui_ai/qwen3-vl-abliterate:8b-instruct", "size_gb": 5.0, "desc": "Qwen 3 VL 8B Abliterate - Fully uncensored vision"},
+    {"name": "huihui_ai/qwen2.5-vl-abliterate:32b-instruct", "size_gb": 18.0, "desc": "Qwen 2.5 VL 32B Abliterate - Premium uncensored vision"},
+    {"name": "huihui_ai/llama3.3-abliterate:70b", "size_gb": 40.0, "desc": "Llama 3.3 70B Abliterate - State-of-the-art uncensored"},
 ]
 
 
@@ -489,6 +506,21 @@ QCheckBox::indicator {
 QCheckBox::indicator:checked {
     background: #0078d4;
     border-color: #0078d4;
+}
+QTreeWidget {
+    background-color: #252526;
+    border: none;
+    color: #cccccc;
+    font-size: 12px;
+}
+QTreeWidget::item {
+    padding: 3px 4px;
+}
+QTreeWidget::item:hover {
+    background-color: #2a2d2e;
+}
+QTreeWidget::item:selected {
+    background-color: #37373d;
 }
 """
 
@@ -803,6 +835,19 @@ hr { border: none; border-top: 1px solid #3e3e3e; margin: 16px 0; }
 }
 .mermaid svg {
     max-width: 100%;
+}
+.save-btn {
+    background: #0078d4;
+    color: white;
+    border: none;
+    padding: 2px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 11px;
+    margin-left: 8px;
+}
+.save-btn:hover {
+    background: #1a8ae8;
 }
 .run-btn {
     background: #2ea043;
@@ -1158,8 +1203,10 @@ class OllamaWorker(QThread):
                             "eval_count": chunk.get("eval_count", 0),
                             "eval_duration": chunk.get("eval_duration", 0),
                         }
+            log.info(f"Response complete: {stats.get('eval_count', 0)} tokens")
             self.response_finished.emit(full_text, stats)
         except Exception as e:
+            log.error(f"Ollama error: {e}")
             self.error_occurred.emit(str(e))
 
 
@@ -1371,12 +1418,13 @@ class ChatRenderer:
             run_html = ""
             if lang.lower() in ('python', 'python3', 'py'):
                 run_html = f'<button class="run-btn" onclick="window.location.href=\'action://runcode/{self._code_idx}\'">Run</button>'
-                self._code_idx += 1
-            else:
-                self._code_idx += 1
+
+            save_html = f'<button class="save-btn" onclick="window.location.href=\'action://savecode/{self._code_idx}\'">Save</button>'
+            apply_html = f'<button class="save-btn" onclick="window.location.href=\'action://applycode/{self._code_idx}\'" style="background:#2ea043">Apply</button>'
+            self._code_idx += 1
 
             return (f'<pre><div class="code-header"><span>{lang}</span>'
-                    f'<button onclick="copyCode(this)">Copy</button>{run_html}</div>'
+                    f'<button onclick="copyCode(this)">Copy</button>{save_html}{apply_html}{run_html}</div>'
                     f'{code_content[4:]}')
 
         html = re.sub(r'<pre><code[^>]*>.*?</code></pre>', add_code_header, html, flags=re.DOTALL)
@@ -2075,6 +2123,396 @@ class SearchBar(QWidget):
             self.page.findText(text, QWebEnginePage.FindBackward)
 
 
+class LineNumberArea(QWidget):
+    def __init__(self, editor):
+        super().__init__(editor)
+        self.editor = editor
+
+    def sizeHint(self):
+        return QSize(self.editor.line_number_width(), 0)
+
+    def paintEvent(self, event):
+        self.editor.line_number_paint(event)
+
+
+class CodeEditor(QPlainTextEdit):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.line_area = LineNumberArea(self)
+        self.blockCountChanged.connect(self._update_line_width)
+        self.updateRequest.connect(self._update_line_area)
+        self.cursorPositionChanged.connect(self._highlight_current_line)
+        self._update_line_width()
+
+    def line_number_width(self):
+        digits = max(1, len(str(self.blockCount())))
+        return 10 + self.fontMetrics().horizontalAdvance('9') * digits
+
+    def _update_line_width(self):
+        self.setViewportMargins(self.line_number_width(), 0, 0, 0)
+
+    def _update_line_area(self, rect, dy):
+        if dy:
+            self.line_area.scroll(0, dy)
+        else:
+            self.line_area.update(0, rect.y(), self.line_area.width(), rect.height())
+        if rect.contains(self.viewport().rect()):
+            self._update_line_width()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        cr = self.contentsRect()
+        self.line_area.setGeometry(cr.left(), cr.top(), self.line_number_width(), cr.height())
+
+    def line_number_paint(self, event):
+        from PyQt5.QtGui import QPainter
+        painter = QPainter(self.line_area)
+        painter.fillRect(event.rect(), QColor("#1e1e1e"))
+
+        block = self.firstVisibleBlock()
+        block_number = block.blockNumber()
+        top = int(self.blockBoundingGeometry(block).translated(self.contentOffset()).top())
+        bottom = top + int(self.blockBoundingRect(block).height())
+
+        while block.isValid() and top <= event.rect().bottom():
+            if block.isVisible() and bottom >= event.rect().top():
+                number = str(block_number + 1)
+                painter.setPen(QColor("#858585") if block_number == self.textCursor().blockNumber() else QColor("#505050"))
+                painter.drawText(0, top, self.line_area.width() - 4,
+                                 self.fontMetrics().height(), Qt.AlignRight, number)
+            block = block.next()
+            top = bottom
+            bottom = top + int(self.blockBoundingRect(block).height())
+            block_number += 1
+        painter.end()
+
+    def _highlight_current_line(self):
+        selections = []
+        if not self.isReadOnly():
+            from PyQt5.QtWidgets import QTextEdit
+            sel = QTextEdit.ExtraSelection()
+            sel.format.setBackground(QColor("#2a2d2e"))
+            sel.format.setProperty(QTextCharFormat.FullWidthSelection, True)
+            sel.cursor = self.textCursor()
+            sel.cursor.clearSelection()
+            selections.append(sel)
+        self.setExtraSelections(selections)
+
+
+class CodeHighlighter(QSyntaxHighlighter):
+    KEYWORDS = {
+        'py': ['def', 'class', 'import', 'from', 'return', 'if', 'elif', 'else',
+               'for', 'while', 'try', 'except', 'finally', 'with', 'as', 'yield',
+               'lambda', 'pass', 'break', 'continue', 'raise', 'and', 'or', 'not',
+               'in', 'is', 'True', 'False', 'None', 'self', 'async', 'await'],
+        'js': ['function', 'const', 'let', 'var', 'return', 'if', 'else', 'for',
+               'while', 'class', 'import', 'export', 'from', 'new', 'this',
+               'try', 'catch', 'finally', 'throw', 'async', 'await', 'yield',
+               'true', 'false', 'null', 'undefined', 'typeof', 'instanceof'],
+    }
+
+    def __init__(self, parent=None, lang='py'):
+        super().__init__(parent)
+        self.lang = lang
+        self._rules = []
+
+        kw_fmt = QTextCharFormat()
+        kw_fmt.setForeground(QColor("#569cd6"))
+        kw_fmt.setFontWeight(QFont.Bold)
+        keywords = self.KEYWORDS.get(lang, self.KEYWORDS['py'])
+        for kw in keywords:
+            self._rules.append((re.compile(r'\b' + kw + r'\b'), kw_fmt))
+
+        str_fmt = QTextCharFormat()
+        str_fmt.setForeground(QColor("#ce9178"))
+        self._rules.append((re.compile(r'"[^"\\]*(\\.[^"\\]*)*"'), str_fmt))
+        self._rules.append((re.compile(r"'[^'\\]*(\\.[^'\\]*)*'"), str_fmt))
+
+        comment_fmt = QTextCharFormat()
+        comment_fmt.setForeground(QColor("#6a9955"))
+        self._rules.append((re.compile(r'#.*$' if lang == 'py' else r'//.*$'), comment_fmt))
+
+        num_fmt = QTextCharFormat()
+        num_fmt.setForeground(QColor("#b5cea8"))
+        self._rules.append((re.compile(r'\b\d+\.?\d*\b'), num_fmt))
+
+        func_fmt = QTextCharFormat()
+        func_fmt.setForeground(QColor("#dcdcaa"))
+        self._rules.append((re.compile(r'\b\w+(?=\()'), func_fmt))
+
+    def highlightBlock(self, text):
+        for pattern, fmt in self._rules:
+            for match in pattern.finditer(text):
+                self.setFormat(match.start(), match.end() - match.start(), fmt)
+
+
+class WorkspacePanel(QWidget):
+    file_opened = pyqtSignal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumWidth(250)
+        self._workspace_dir = None
+        self._open_tabs = {}
+        self._highlighters = {}
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        header = QWidget()
+        header.setStyleSheet("background-color: #252526; border-bottom: 1px solid #3e3e3e;")
+        header.setFixedHeight(36)
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(8, 0, 8, 0)
+
+        self.workspace_label = QLabel("No workspace")
+        self.workspace_label.setStyleSheet("color: #808080; font-size: 11px;")
+        header_layout.addWidget(self.workspace_label, 1)
+
+        open_btn = QPushButton("Open")
+        open_btn.setFixedHeight(24)
+        open_btn.setStyleSheet("font-size: 11px; padding: 2px 10px;")
+        open_btn.clicked.connect(self._open_workspace)
+        header_layout.addWidget(open_btn)
+
+        layout.addWidget(header)
+
+        self.splitter = QSplitter(Qt.Vertical)
+
+        self.file_tree = QTreeWidget()
+        self.file_tree.setHeaderHidden(True)
+        self.file_tree.setStyleSheet("""
+            QTreeWidget { background-color: #252526; border: none; color: #cccccc; font-size: 12px; }
+            QTreeWidget::item { padding: 3px 4px; }
+            QTreeWidget::item:hover { background-color: #2a2d2e; }
+            QTreeWidget::item:selected { background-color: #37373d; }
+        """)
+        self.file_tree.itemDoubleClicked.connect(self._on_file_double_clicked)
+        self.file_tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.file_tree.customContextMenuRequested.connect(self._tree_context_menu)
+        self.splitter.addWidget(self.file_tree)
+
+        editor_container = QWidget()
+        editor_layout = QVBoxLayout(editor_container)
+        editor_layout.setContentsMargins(0, 0, 0, 0)
+        editor_layout.setSpacing(0)
+
+        self.tab_widget = QTabWidget()
+        self.tab_widget.setTabsClosable(True)
+        self.tab_widget.tabCloseRequested.connect(self._close_tab)
+        self.tab_widget.setStyleSheet("""
+            QTabWidget::pane { border: none; background: #1e1e1e; }
+            QTabBar { background: #252526; }
+            QTabBar::tab { background: #2d2d2d; color: #808080; padding: 6px 14px;
+                           border: none; border-right: 1px solid #1e1e1e; font-size: 12px; }
+            QTabBar::tab:selected { background: #1e1e1e; color: #ffffff; }
+            QTabBar::tab:hover { background: #37373d; }
+        """)
+        editor_layout.addWidget(self.tab_widget)
+
+        self.splitter.addWidget(editor_container)
+        self.splitter.setSizes([200, 400])
+        layout.addWidget(self.splitter)
+
+    def _open_workspace(self):
+        path = QFileDialog.getExistingDirectory(self, "Open Workspace")
+        if path:
+            self.set_workspace(path)
+
+    def set_workspace(self, path):
+        self._workspace_dir = Path(path)
+        short = self._workspace_dir.name
+        self.workspace_label.setText(short)
+        self.workspace_label.setToolTip(str(self._workspace_dir))
+        self._refresh_tree()
+
+    def get_workspace_dir(self):
+        return self._workspace_dir
+
+    def _refresh_tree(self):
+        self.file_tree.clear()
+        if not self._workspace_dir or not self._workspace_dir.exists():
+            return
+        self._populate_tree(self._workspace_dir, self.file_tree.invisibleRootItem(), depth=0)
+
+    def _populate_tree(self, directory, parent_item, depth=0):
+        if depth > 5:
+            return
+        try:
+            entries = sorted(directory.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower()))
+        except PermissionError:
+            return
+        skip_dirs = {'.git', '__pycache__', 'node_modules', '.venv', 'venv', '.tox',
+                     '.mypy_cache', '.pytest_cache', 'dist', 'build', '.eggs', '.idea', '.vscode'}
+        for entry in entries:
+            if entry.name.startswith('.') and entry.is_dir() and entry.name not in ('.github',):
+                if entry.name in skip_dirs:
+                    continue
+            if entry.is_dir() and entry.name in skip_dirs:
+                continue
+            item = QTreeWidgetItem(parent_item, [entry.name])
+            item.setData(0, Qt.UserRole, str(entry))
+            if entry.is_dir():
+                item.setForeground(0, QColor("#e8a838"))
+                self._populate_tree(entry, item, depth + 1)
+            else:
+                ext = entry.suffix.lower()
+                if ext in ('.py', '.pyw'):
+                    item.setForeground(0, QColor("#4fc3f7"))
+                elif ext in ('.js', '.ts', '.jsx', '.tsx'):
+                    item.setForeground(0, QColor("#f9d849"))
+                elif ext in ('.html', '.css'):
+                    item.setForeground(0, QColor("#e06c75"))
+                elif ext in ('.json', '.yaml', '.yml', '.toml'):
+                    item.setForeground(0, QColor("#98c379"))
+                elif ext in ('.md', '.txt', '.rst'):
+                    item.setForeground(0, QColor("#cccccc"))
+
+    def _on_file_double_clicked(self, item, column):
+        filepath = item.data(0, Qt.UserRole)
+        if filepath and Path(filepath).is_file():
+            self.open_file(filepath)
+
+    def open_file(self, filepath):
+        filepath = str(filepath)
+        if filepath in self._open_tabs:
+            self.tab_widget.setCurrentWidget(self._open_tabs[filepath])
+            return
+
+        try:
+            with open(filepath, 'r', errors='replace') as f:
+                content = f.read(2_000_000)
+        except OSError:
+            return
+
+        editor = CodeEditor()
+        editor.setPlainText(content)
+        editor.setStyleSheet("""
+            QPlainTextEdit {
+                background-color: #1e1e1e; color: #d4d4d4; border: none;
+                font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+                font-size: 13px; padding: 8px;
+            }
+        """)
+        editor.setLineWrapMode(QPlainTextEdit.NoWrap)
+        editor.setProperty("filepath", filepath)
+        log.info(f"Opened file: {filepath}")
+
+        ext = Path(filepath).suffix.lower()
+        lang_map = {'.py': 'py', '.pyw': 'py', '.js': 'js', '.ts': 'js',
+                    '.jsx': 'js', '.tsx': 'js'}
+        lang = lang_map.get(ext)
+        if lang:
+            hl = CodeHighlighter(editor.document(), lang)
+            self._highlighters[filepath] = hl
+
+        tab_name = Path(filepath).name
+        idx = self.tab_widget.addTab(editor, tab_name)
+        self.tab_widget.setCurrentIndex(idx)
+        self.tab_widget.setTabToolTip(idx, filepath)
+        self._open_tabs[filepath] = editor
+
+    def save_current_file(self):
+        editor = self.tab_widget.currentWidget()
+        if not editor or not isinstance(editor, QPlainTextEdit):
+            return False
+        filepath = editor.property("filepath")
+        if not filepath:
+            return False
+        try:
+            with open(filepath, 'w') as f:
+                f.write(editor.toPlainText())
+            return True
+        except OSError:
+            return False
+
+    def write_to_file(self, filepath, content):
+        filepath = str(filepath)
+        try:
+            os.makedirs(os.path.dirname(filepath), exist_ok=True)
+            with open(filepath, 'w') as f:
+                f.write(content)
+        except OSError as e:
+            QMessageBox.warning(self, "Error", f"Failed to write: {e}")
+            return
+        self._refresh_tree()
+        self.open_file(filepath)
+
+    def _close_tab(self, index):
+        editor = self.tab_widget.widget(index)
+        if editor:
+            filepath = editor.property("filepath")
+            if filepath and filepath in self._open_tabs:
+                del self._open_tabs[filepath]
+            if filepath and filepath in self._highlighters:
+                del self._highlighters[filepath]
+        self.tab_widget.removeTab(index)
+
+    def _tree_context_menu(self, pos):
+        item = self.file_tree.itemAt(pos)
+        menu = QMenu(self)
+
+        if item:
+            filepath = item.data(0, Qt.UserRole)
+            if filepath and Path(filepath).is_file():
+                open_action = menu.addAction("Open")
+                delete_action = menu.addAction("Delete")
+                action = menu.exec_(self.file_tree.mapToGlobal(pos))
+                if action == open_action:
+                    self.open_file(filepath)
+                elif action == delete_action:
+                    reply = QMessageBox.question(
+                        self, "Delete File", f"Delete {Path(filepath).name}?",
+                        QMessageBox.Yes | QMessageBox.No
+                    )
+                    if reply == QMessageBox.Yes:
+                        try:
+                            Path(filepath).unlink()
+                            self._refresh_tree()
+                        except OSError:
+                            pass
+            elif filepath and Path(filepath).is_dir():
+                new_file_action = menu.addAction("New File Here")
+                action = menu.exec_(self.file_tree.mapToGlobal(pos))
+                if action == new_file_action:
+                    name, ok = QInputDialog.getText(self, "New File", "Filename:")
+                    if ok and name.strip():
+                        new_path = Path(filepath) / name.strip()
+                        try:
+                            new_path.touch()
+                            self._refresh_tree()
+                            self.open_file(str(new_path))
+                        except OSError:
+                            pass
+        else:
+            if self._workspace_dir:
+                new_file_action = menu.addAction("New File")
+                new_dir_action = menu.addAction("New Folder")
+                refresh_action = menu.addAction("Refresh")
+                action = menu.exec_(self.file_tree.mapToGlobal(pos))
+                if action == new_file_action:
+                    name, ok = QInputDialog.getText(self, "New File", "Filename:")
+                    if ok and name.strip():
+                        new_path = self._workspace_dir / name.strip()
+                        try:
+                            new_path.touch()
+                            self._refresh_tree()
+                            self.open_file(str(new_path))
+                        except OSError:
+                            pass
+                elif action == new_dir_action:
+                    name, ok = QInputDialog.getText(self, "New Folder", "Folder name:")
+                    if ok and name.strip():
+                        try:
+                            (self._workspace_dir / name.strip()).mkdir(exist_ok=True)
+                            self._refresh_tree()
+                        except OSError:
+                            pass
+                elif action == refresh_action:
+                    self._refresh_tree()
+
+
 # --- Input Widget ---
 
 class InputWidget(QWidget):
@@ -2544,6 +2982,137 @@ class SidebarWidget(QWidget):
                 return
 
 
+# --- Activity Bar ---
+
+class ActivityBar(QWidget):
+    activity_changed = pyqtSignal(int)
+
+    ITEMS = [
+        ("\u2630", "Explorer (Ctrl+Shift+E)"),
+        ("\u2709", "Chat (Ctrl+Shift+A)"),
+    ]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedWidth(48)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 8, 0, 8)
+        layout.setSpacing(0)
+
+        self.buttons = []
+        for i, (label, tooltip) in enumerate(self.ITEMS):
+            btn = QPushButton(label)
+            btn.setToolTip(tooltip)
+            btn.setFixedSize(48, 44)
+            btn.setCheckable(True)
+            btn.setStyleSheet("""
+                QPushButton { background: transparent; color: #808080; border: none;
+                              font-size: 18px; border-left: 2px solid transparent; }
+                QPushButton:hover { color: #ffffff; }
+                QPushButton:checked { color: #ffffff; border-left: 2px solid #0078d4; }
+            """)
+            btn.clicked.connect(lambda checked, idx=i: self._on_click(idx))
+            layout.addWidget(btn)
+            self.buttons.append(btn)
+
+        layout.addStretch()
+        self.buttons[1].setChecked(True)
+        self._current = 1
+
+    def _on_click(self, idx):
+        if idx == self._current:
+            return
+        for i, btn in enumerate(self.buttons):
+            btn.setChecked(i == idx)
+        self._current = idx
+        self.activity_changed.emit(idx)
+
+
+# --- Terminal ---
+
+class TerminalWidget(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        header = QWidget()
+        header.setFixedHeight(28)
+        header.setStyleSheet("background: #252526; border-top: 1px solid #3e3e3e;")
+        hl = QHBoxLayout(header)
+        hl.setContentsMargins(12, 0, 8, 0)
+        title = QLabel("TERMINAL")
+        title.setStyleSheet("color: #888; font-size: 11px; font-weight: bold;")
+        hl.addWidget(title)
+        hl.addStretch()
+        close_btn = QPushButton("\u00d7")
+        close_btn.setFixedSize(20, 20)
+        close_btn.setStyleSheet("QPushButton { background: transparent; color: #808080; border: none; font-size: 14px; } QPushButton:hover { color: #fff; }")
+        close_btn.clicked.connect(self.hide)
+        hl.addWidget(close_btn)
+        layout.addWidget(header)
+
+        self.output = QPlainTextEdit()
+        self.output.setReadOnly(True)
+        self.output.setStyleSheet("""
+            QPlainTextEdit { background: #1e1e1e; color: #cccccc; border: none;
+                             font-family: 'JetBrains Mono', 'Fira Code', monospace;
+                             font-size: 12px; padding: 8px; }
+        """)
+        layout.addWidget(self.output)
+
+        self.cmd_input = QLineEdit()
+        self.cmd_input.setPlaceholderText("$ Enter command...")
+        self.cmd_input.setStyleSheet("""
+            QLineEdit { background: #2d2d2d; color: #cccccc; border: none;
+                        border-top: 1px solid #3e3e3e;
+                        font-family: 'JetBrains Mono', 'Fira Code', monospace;
+                        font-size: 12px; padding: 6px 12px; border-radius: 0; }
+        """)
+        self.cmd_input.returnPressed.connect(self._run)
+        layout.addWidget(self.cmd_input)
+
+        self._cwd = str(Path.home())
+
+    def _run(self):
+        cmd = self.cmd_input.text().strip()
+        if not cmd:
+            return
+        self.cmd_input.clear()
+        self.output.appendPlainText(f"$ {cmd}")
+
+        if cmd.startswith("cd "):
+            target = cmd[3:].strip()
+            new_dir = os.path.expanduser(target)
+            if not os.path.isabs(new_dir):
+                new_dir = os.path.join(self._cwd, new_dir)
+            new_dir = os.path.normpath(new_dir)
+            if os.path.isdir(new_dir):
+                self._cwd = new_dir
+                self.output.appendPlainText(f"(cwd: {self._cwd})")
+            else:
+                self.output.appendPlainText(f"cd: no such directory: {target}")
+            return
+
+        try:
+            result = subprocess.run(
+                cmd, shell=True, capture_output=True, text=True,
+                timeout=30, cwd=self._cwd
+            )
+            if result.stdout:
+                self.output.appendPlainText(result.stdout.rstrip())
+            if result.stderr:
+                self.output.appendPlainText(result.stderr.rstrip())
+        except subprocess.TimeoutExpired:
+            self.output.appendPlainText("[timed out after 30s]")
+        except Exception as e:
+            self.output.appendPlainText(f"[error: {e}]")
+
+    def set_cwd(self, path):
+        self._cwd = str(path)
+
+
 # --- Main Window ---
 
 class MainWindow(QMainWindow):
@@ -2578,6 +3147,7 @@ class MainWindow(QMainWindow):
         self._new_chat()
         self._start_connection_checker()
         self._start_gpu_monitor()
+        self._restore_workspace()
 
         self._stream_timer = QTimer()
         self._stream_timer.setInterval(200)
@@ -2593,62 +3163,160 @@ class MainWindow(QMainWindow):
     def _build_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
-        main_layout = QHBoxLayout(central)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
+        root_layout = QHBoxLayout(central)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
 
-        self.splitter = QSplitter(Qt.Horizontal)
-        main_layout.addWidget(self.splitter)
+        # --- Activity Bar (far left, 48px) ---
+        self.activity_bar = ActivityBar()
+        self.activity_bar.setStyleSheet("background-color: #333333;")
+        root_layout.addWidget(self.activity_bar)
 
+        # --- Left Sidebar (stacked: explorer / conversations) ---
         self.sidebar_container = QWidget()
+        self.sidebar_container.setFixedWidth(260)
         self.sidebar_container.setStyleSheet("background-color: #252526;")
         sidebar_layout = QVBoxLayout(self.sidebar_container)
         sidebar_layout.setContentsMargins(0, 0, 0, 0)
+        sidebar_layout.setSpacing(0)
+
+        self.sidebar_stack = QStackedWidget()
+
+        # Page 0: File explorer
+        file_panel = QWidget()
+        file_panel.setStyleSheet("background-color: #252526;")
+        fp_layout = QVBoxLayout(file_panel)
+        fp_layout.setContentsMargins(0, 0, 0, 0)
+        fp_layout.setSpacing(0)
+
+        file_header = QWidget()
+        file_header.setFixedHeight(36)
+        fh_layout = QHBoxLayout(file_header)
+        fh_layout.setContentsMargins(12, 0, 8, 0)
+        exp_label = QLabel("EXPLORER")
+        exp_label.setStyleSheet("color: #888; font-size: 11px; font-weight: bold; letter-spacing: 1px;")
+        fh_layout.addWidget(exp_label)
+        fh_layout.addStretch()
+        open_folder_btn = QPushButton("Open Folder")
+        open_folder_btn.setFixedHeight(22)
+        open_folder_btn.setStyleSheet("font-size: 11px; padding: 2px 8px; background: #0078d4; border-radius: 3px;")
+        open_folder_btn.clicked.connect(self._open_workspace_dialog)
+        fh_layout.addWidget(open_folder_btn)
+        fp_layout.addWidget(file_header)
+
+        self.workspace_panel = WorkspacePanel()
+        self.file_tree = self.workspace_panel.file_tree
+        fp_layout.addWidget(self.file_tree)
+
+        self.sidebar_stack.addWidget(file_panel)
+
+        # Page 1: Conversation list
         self.sidebar = SidebarWidget(self.store)
-        sidebar_layout.addWidget(self.sidebar)
-        self.splitter.addWidget(self.sidebar_container)
+        self.sidebar_stack.addWidget(self.sidebar)
 
-        main_area = QWidget()
-        main_area_layout = QVBoxLayout(main_area)
-        main_area_layout.setContentsMargins(0, 0, 0, 0)
-        main_area_layout.setSpacing(0)
+        sidebar_layout.addWidget(self.sidebar_stack)
+        self.sidebar_stack.setCurrentIndex(1)
+        root_layout.addWidget(self.sidebar_container)
 
-        top_bar = QWidget()
-        top_bar.setStyleSheet("background-color: #252526; border-bottom: 1px solid #3e3e3e;")
-        top_bar.setFixedHeight(48)
-        top_layout = QHBoxLayout(top_bar)
-        top_layout.setContentsMargins(16, 0, 16, 0)
+        # --- Main splitter (center editor + right chat) ---
+        self.main_splitter = QSplitter(Qt.Horizontal)
+
+        # --- Center: vertical splitter (editor + terminal) ---
+        self.center_splitter = QSplitter(Qt.Vertical)
+
+        editor_area = QWidget()
+        ea_layout = QVBoxLayout(editor_area)
+        ea_layout.setContentsMargins(0, 0, 0, 0)
+        ea_layout.setSpacing(0)
+
+        self.breadcrumb = QLabel("Welcome")
+        self.breadcrumb.setStyleSheet(
+            "background: #252526; color: #888; padding: 4px 12px; font-size: 11px;"
+            "border-bottom: 1px solid #3e3e3e;"
+        )
+        self.breadcrumb.setFixedHeight(24)
+        ea_layout.addWidget(self.breadcrumb)
+
+        self.editor_tabs = self.workspace_panel.tab_widget
+        self.editor_tabs.setStyleSheet("""
+            QTabWidget::pane { border: none; background: #1e1e1e; }
+            QTabBar { background: #252526; }
+            QTabBar::tab { background: #2d2d2d; color: #808080; padding: 6px 14px;
+                           border: none; border-right: 1px solid #1e1e1e; font-size: 12px;
+                           min-width: 80px; }
+            QTabBar::tab:selected { background: #1e1e1e; color: #ffffff; }
+            QTabBar::tab:hover { background: #37373d; }
+        """)
+        self.editor_tabs.currentChanged.connect(self._on_editor_tab_changed)
+
+        welcome_label = QLabel(
+            f"{APP_NAME}\n\nOpen a folder from the Explorer\n"
+            "or use Chat to generate code\n\n"
+            "Ctrl+Shift+E  Explorer\n"
+            "Ctrl+Shift+A  Chat\n"
+            "Ctrl+`  Terminal\n"
+            "Ctrl+E  Toggle Chat Panel"
+        )
+        welcome_label.setAlignment(Qt.AlignCenter)
+        welcome_label.setStyleSheet("color: #555; font-size: 14px; background: #1e1e1e;")
+        self.editor_tabs.addTab(welcome_label, "Welcome")
+        ea_layout.addWidget(self.editor_tabs)
+
+        self.center_splitter.addWidget(editor_area)
+
+        self.terminal = TerminalWidget()
+        self.terminal.hide()
+        self.center_splitter.addWidget(self.terminal)
+        self.center_splitter.setSizes([600, 0])
+
+        self.main_splitter.addWidget(self.center_splitter)
+
+        # --- Right Panel: Chat ---
+        self.chat_panel = QWidget()
+        self.chat_panel.setMinimumWidth(350)
+        chat_layout = QVBoxLayout(self.chat_panel)
+        chat_layout.setContentsMargins(0, 0, 0, 0)
+        chat_layout.setSpacing(0)
+
+        chat_top = QWidget()
+        chat_top.setStyleSheet("background-color: #252526; border-bottom: 1px solid #3e3e3e;")
+        chat_top.setFixedHeight(40)
+        ct_layout = QHBoxLayout(chat_top)
+        ct_layout.setContentsMargins(8, 0, 8, 0)
+        ct_layout.setSpacing(6)
 
         self.title_label = QLabel(APP_NAME)
-        self.title_label.setObjectName("titleLabel")
-        top_layout.addWidget(self.title_label)
+        self.title_label.setStyleSheet("color: #ccc; font-size: 12px; font-weight: bold;")
+        ct_layout.addWidget(self.title_label)
 
-        top_layout.addStretch()
+        ct_layout.addStretch()
 
-        self.system_prompt_btn = QPushButton("System Prompt")
+        self.system_prompt_btn = QPushButton("System")
         self.system_prompt_btn.setObjectName("systemPromptBtn")
-        top_layout.addWidget(self.system_prompt_btn)
+        self.system_prompt_btn.setStyleSheet("font-size: 11px; padding: 2px 8px;")
+        ct_layout.addWidget(self.system_prompt_btn)
 
         self.gear_btn = QPushButton("\u2699")
         self.gear_btn.setObjectName("gearBtn")
         self.gear_btn.setToolTip("Settings")
-        top_layout.addWidget(self.gear_btn)
+        ct_layout.addWidget(self.gear_btn)
 
         self.manage_btn = QPushButton("\u2261")
         self.manage_btn.setObjectName("gearBtn")
-        self.manage_btn.setToolTip("Manage conversations (bulk delete)")
-        top_layout.addWidget(self.manage_btn)
+        self.manage_btn.setToolTip("Manage conversations")
+        ct_layout.addWidget(self.manage_btn)
 
         self.models_btn = QPushButton("\u2193")
         self.models_btn.setObjectName("gearBtn")
-        self.models_btn.setToolTip("Model management (pull / delete)")
-        top_layout.addWidget(self.models_btn)
+        self.models_btn.setToolTip("Model management")
+        ct_layout.addWidget(self.models_btn)
 
         self.model_combo = QComboBox()
         self.model_combo.addItem(DEFAULT_MODEL)
-        top_layout.addWidget(self.model_combo)
+        self.model_combo.setMinimumWidth(120)
+        ct_layout.addWidget(self.model_combo)
 
-        main_area_layout.addWidget(top_bar)
+        chat_layout.addWidget(chat_top)
 
         self.ctx_bar = QProgressBar()
         self.ctx_bar.setRange(0, 100)
@@ -2659,7 +3327,7 @@ class MainWindow(QMainWindow):
             QProgressBar { background-color: #1e1e1e; border: none; border-radius: 0; font-size: 9px; color: #888; }
             QProgressBar::chunk { background-color: #0078d4; border-radius: 0; }
         """)
-        main_area_layout.addWidget(self.ctx_bar)
+        chat_layout.addWidget(self.ctx_bar)
 
         self.chat_page = ChatPage()
         self.chat_page.setBackgroundColor(QColor("#1e1e1e"))
@@ -2671,16 +3339,18 @@ class MainWindow(QMainWindow):
         self.chat_view.setStyleSheet("background-color: #1e1e1e;")
 
         self.search_bar = SearchBar(self.chat_page)
-        main_area_layout.addWidget(self.search_bar)
-
-        main_area_layout.addWidget(self.chat_view)
+        chat_layout.addWidget(self.search_bar)
+        chat_layout.addWidget(self.chat_view)
 
         self.input_widget = InputWidget()
-        main_area_layout.addWidget(self.input_widget)
+        chat_layout.addWidget(self.input_widget)
 
-        self.splitter.addWidget(main_area)
-        self.splitter.setSizes([260, 640])
+        self.main_splitter.addWidget(self.chat_panel)
+        self.main_splitter.setSizes([700, 400])
 
+        root_layout.addWidget(self.main_splitter)
+
+        # --- Status Bar ---
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
 
@@ -2689,8 +3359,24 @@ class MainWindow(QMainWindow):
         self.connection_dot.setToolTip("Checking Ollama connection...")
         self.status_bar.addWidget(self.connection_dot)
 
+        self.editor_pos_label = QLabel("Ln 1, Col 1")
+        self.editor_pos_label.setStyleSheet("padding: 0 8px;")
+        self.status_bar.addPermanentWidget(self.editor_pos_label)
+
         self.status_label = QLabel(f"Model: {DEFAULT_MODEL}")
         self.status_bar.addPermanentWidget(self.status_label)
+
+        self.f_toggle_btn = QPushButton("Frictionless: OFF")
+        self.f_toggle_btn.setFlat(True)
+        self.f_toggle_btn.setStyleSheet("color: #8b949e; font-weight: bold; padding: 0 10px;")
+        self.f_toggle_btn.clicked.connect(self._remind_upgrade)
+        self.status_bar.addPermanentWidget(self.f_toggle_btn)
+
+        self.sum_btn = QPushButton("Summarize")
+        self.sum_btn.setFlat(True)
+        self.sum_btn.setStyleSheet("color: #888; font-weight: bold; padding: 0 10px;")
+        self.sum_btn.clicked.connect(self._remind_upgrade)
+        self.status_bar.addPermanentWidget(self.sum_btn)
 
         self.gpu_label = QLabel("")
         self.gpu_label.setStyleSheet("padding: 0 8px;")
@@ -2716,6 +3402,8 @@ class MainWindow(QMainWindow):
         self.model_combo.currentTextChanged.connect(self._on_model_changed)
         self.chat_page.action_requested.connect(self._on_chat_action)
         self.input_widget.text_edit.installEventFilter(self)
+        self.activity_bar.activity_changed.connect(self._on_activity_changed)
+        self.file_tree.itemDoubleClicked.connect(self._on_file_tree_double_click)
 
     def _setup_shortcuts(self):
         QShortcut(QKeySequence("Ctrl+N"), self, self._new_chat)
@@ -2730,6 +3418,11 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+Up"), self, self._model_prev)
         QShortcut(QKeySequence("Ctrl+Down"), self, self._model_next)
         QShortcut(QKeySequence("Ctrl+T"), self, self._show_templates)
+        QShortcut(QKeySequence("Ctrl+E"), self, self._toggle_chat_panel)
+        QShortcut(QKeySequence("Ctrl+S"), self, self._save_workspace_file)
+        QShortcut(QKeySequence("Ctrl+Shift+E"), self, lambda: self._on_activity_changed(0))
+        QShortcut(QKeySequence("Ctrl+Shift+A"), self, lambda: self._on_activity_changed(1))
+        QShortcut(QKeySequence("Ctrl+`"), self, self._toggle_terminal)
         QShortcut(QKeySequence("Escape"), self, self._escape_handler)
 
     def _start_connection_checker(self):
@@ -2772,7 +3465,13 @@ class MainWindow(QMainWindow):
     def _on_models_loaded(self, models):
         self.model_combo.blockSignals(True)
         self.model_combo.clear()
-        for m in models:
+        pinned = [
+            "huihui_ai/qwen3-coder-abliterated:latest",
+            "huihui_ai/qwen3-vl-abliterated:latest",
+        ]
+        top = [p for p in pinned if p in models]
+        rest = [m for m in models if m not in top]
+        for m in top + rest:
             self.model_combo.addItem(m)
         idx = self.model_combo.findText(
             self.settings_data.get("model", DEFAULT_MODEL)
@@ -2885,6 +3584,161 @@ class MainWindow(QMainWindow):
                 QProgressBar::chunk { background-color: #0078d4; }
             """)
 
+    def _build_workspace_context(self):
+        ws = self.workspace_panel.get_workspace_dir()
+        if not ws or not ws.exists():
+            return ""
+        parts = [f"\n\n[WORKSPACE: {ws}]"]
+        parts.append("Files in workspace:")
+        try:
+            skip = {'.git', '__pycache__', 'node_modules', '.venv', 'venv',
+                    'dist', 'build', '.mypy_cache', '.pytest_cache', '.eggs'}
+            for root, dirs, fnames in os.walk(str(ws)):
+                dirs[:] = [d for d in dirs if d not in skip and not d.startswith('.')]
+                rel = os.path.relpath(root, str(ws))
+                depth = rel.count(os.sep) if rel != '.' else 0
+                if depth > 4:
+                    dirs.clear()
+                    continue
+                prefix = "  " * depth
+                if rel != '.':
+                    parts.append(f"{prefix}{os.path.basename(root)}/")
+                for fn in sorted(fnames)[:30]:
+                    parts.append(f"{prefix}  {fn}")
+        except OSError:
+            pass
+        return "\n".join(parts)
+
+    def _resolve_at_references(self, text):
+        ws = self.workspace_panel.get_workspace_dir()
+        if not ws:
+            return text
+        at_refs = re.findall(r'@([\w./\-_]+)', text)
+        if not at_refs:
+            return text
+        injected = []
+        for ref in at_refs:
+            candidates = [ws / ref]
+            if not candidates[0].exists():
+                for root, dirs, fnames in os.walk(str(ws)):
+                    for fn in fnames:
+                        if fn == ref or fn == os.path.basename(ref):
+                            candidates.append(Path(root) / fn)
+                    dirs[:] = [d for d in dirs if d not in {'.git', '__pycache__', 'node_modules'}]
+            for cand in candidates:
+                if cand.exists() and cand.is_file():
+                    try:
+                        content = cand.read_text(errors='replace')[:50_000]
+                        ext = cand.suffix.lstrip('.')
+                        rel = os.path.relpath(str(cand), str(ws))
+                        injected.append(f"[File: {rel}]\n```{ext}\n{content}\n```")
+                        log.info(f"Injected @{ref} -> {rel} ({len(content)} chars)")
+                    except OSError:
+                        pass
+                    break
+        if injected:
+            return "\n\n".join(injected) + "\n\n" + text
+        return text
+
+    def _resolve_path_references(self, text):
+        paths_found = re.findall(r'(/(?:home|tmp|opt|var|usr|etc)[\w./\-_]+)', text)
+        if not paths_found:
+            return text
+        injected = []
+        for path_str in paths_found:
+            p = Path(path_str)
+            if not p.exists():
+                continue
+            if p.is_file():
+                try:
+                    content = p.read_text(errors='replace')[:50_000]
+                    ext = p.suffix.lstrip('.')
+                    injected.append(f"[File: {path_str}]\n```{ext}\n{content}\n```")
+                    log.info(f"Auto-read file: {path_str} ({len(content)} chars)")
+                except OSError:
+                    pass
+            elif p.is_dir():
+                dir_context = self._read_directory_context(p)
+                if dir_context:
+                    injected.append(dir_context)
+                    log.info(f"Auto-read directory: {path_str}")
+        if injected:
+            return "\n\n".join(injected) + "\n\n" + text
+        return text
+
+    def _read_directory_context(self, directory):
+        parts = [f"[Directory: {directory}]"]
+        skip = {'.git', '__pycache__', 'node_modules', '.venv', 'venv',
+                'dist', 'build', '.mypy_cache', '.pytest_cache', '.eggs'}
+        file_list = []
+        try:
+            for root, dirs, fnames in os.walk(str(directory)):
+                dirs[:] = [d for d in sorted(dirs) if d not in skip and not d.startswith('.')]
+                depth = os.path.relpath(root, str(directory)).count(os.sep)
+                if depth > 3:
+                    dirs.clear()
+                    continue
+                for fn in sorted(fnames):
+                    rel = os.path.relpath(os.path.join(root, fn), str(directory))
+                    file_list.append(rel)
+        except OSError:
+            pass
+        if not file_list:
+            return ""
+        parts.append("File tree:")
+        for f in file_list[:100]:
+            parts.append(f"  {f}")
+
+        readme = None
+        for name in ('README.md', 'README.txt', 'README', 'readme.md'):
+            rp = directory / name
+            if rp.exists():
+                readme = rp
+                break
+        if readme:
+            try:
+                content = readme.read_text(errors='replace')[:10_000]
+                parts.append(f"\n[File: {readme.name}]\n```md\n{content}\n```")
+            except OSError:
+                pass
+
+        main_files = []
+        priority = ['main.py', 'app.py', 'index.py', 'index.js', 'main.js',
+                     'app.js', 'main.go', 'main.rs', 'Makefile', 'setup.py',
+                     'pyproject.toml', 'package.json', 'Cargo.toml']
+        for root, dirs, fnames in os.walk(str(directory)):
+            dirs[:] = [d for d in dirs if d not in skip]
+            for fn in fnames:
+                if fn in priority or fn == directory.name + '.py':
+                    main_files.append(Path(root) / fn)
+            break
+
+        for mf in main_files[:3]:
+            try:
+                content = mf.read_text(errors='replace')[:30_000]
+                ext = mf.suffix.lstrip('.')
+                rel = os.path.relpath(str(mf), str(directory))
+                parts.append(f"\n[File: {rel}]\n```{ext}\n{content}\n```")
+                log.info(f"Auto-read main file: {rel} ({len(content)} chars)")
+            except OSError:
+                pass
+
+        return "\n".join(parts)
+
+    def _inject_open_file_context(self):
+        editor = self.editor_tabs.currentWidget()
+        if not editor or not isinstance(editor, QPlainTextEdit):
+            return ""
+        filepath = editor.property("filepath")
+        if not filepath:
+            return ""
+        try:
+            content = editor.toPlainText()[:30_000]
+            ext = Path(filepath).suffix.lstrip('.')
+            return f"\n\n[Currently open file: {filepath}]\n```{ext}\n{content}\n```"
+        except Exception:
+            return ""
+
     def _send_message(self, text, images=None, files=None):
         if text.startswith("/"):
             self._handle_slash_command(text)
@@ -2893,7 +3747,9 @@ class MainWindow(QMainWindow):
         if not self.current_conv:
             self._new_chat()
 
-        content = text
+        content = self._resolve_at_references(text)
+        content = self._resolve_path_references(content)
+
         attached_file_info = []
         if files:
             for af in files:
@@ -2911,6 +3767,8 @@ class MainWindow(QMainWindow):
         if attached_file_info:
             msg["attached_files"] = attached_file_info
         self.current_conv["messages"].append(msg)
+
+        log.info(f"Sending message ({len(content)} chars) to {self.model_combo.currentText()}")
 
         if len(self.current_conv["messages"]) == 1:
             title = text[:50].replace("\n", " ")
@@ -2931,10 +3789,15 @@ class MainWindow(QMainWindow):
         model = self.model_combo.currentText() or DEFAULT_MODEL
         self.current_conv["model"] = model
         gen_params = self.settings_data.get("gen_params", DEFAULT_GEN_PARAMS)
+
+        system_prompt = self.current_conv.get("system_prompt", "")
+        system_prompt += self._build_workspace_context()
+        system_prompt += self._inject_open_file_context()
+
         self.worker = OllamaWorker(
             model,
             self.current_conv["messages"],
-            self.current_conv.get("system_prompt", ""),
+            system_prompt,
             gen_params,
         )
         self.worker.token_received.connect(self._on_token)
@@ -3017,7 +3880,7 @@ class MainWindow(QMainWindow):
                                .replace("${", "\\${"))
             self.chat_view.page().runJavaScript(
                 f"document.getElementById('streaming-text').innerHTML = `{html_escaped}`;"
-                "if (_autoScroll) {{ window.scrollTo({{top: document.body.scrollHeight, behavior: 'smooth'}}); }}"
+                f"if (_autoScroll) {{ window.scrollTo({{top: document.body.scrollHeight, behavior: 'smooth'}}); }}"
             )
         except Exception:
             pass
@@ -3175,6 +4038,12 @@ class MainWindow(QMainWindow):
         elif action == "runcode":
             self._execute_code_block(index)
 
+        elif action == "savecode":
+            self._save_code_block(index)
+
+        elif action == "applycode":
+            self._apply_code_block(index)
+
     def _edit_system_prompt(self):
         current = ""
         if self.current_conv:
@@ -3213,6 +4082,7 @@ class MainWindow(QMainWindow):
     def _toggle_sidebar(self):
         visible = self.sidebar_container.isVisible()
         self.sidebar_container.setVisible(not visible)
+        self.activity_bar.setVisible(not visible or True)
 
     def _import_conversation(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -3315,6 +4185,58 @@ class MainWindow(QMainWindow):
         else:
             self.search_bar.show_bar()
 
+    def _on_activity_changed(self, idx):
+        self.sidebar_stack.setCurrentIndex(idx)
+        self.activity_bar._on_click(idx)
+        self.sidebar_container.setVisible(True)
+
+    def _on_file_tree_double_click(self, item, column):
+        filepath = item.data(0, Qt.UserRole)
+        if filepath and Path(filepath).is_file():
+            self.workspace_panel.open_file(filepath)
+
+    def _on_editor_tab_changed(self, index):
+        editor = self.editor_tabs.widget(index)
+        if editor and isinstance(editor, QPlainTextEdit):
+            filepath = editor.property("filepath")
+            if filepath:
+                self.breadcrumb.setText(filepath)
+                return
+        tab_text = self.editor_tabs.tabText(index) if index >= 0 else ""
+        self.breadcrumb.setText(tab_text or "Welcome")
+
+    def _restore_workspace(self):
+        workspace_dir = self.settings_data.get("workspace_dir", "")
+        if workspace_dir and Path(workspace_dir).exists():
+            self.workspace_panel.set_workspace(workspace_dir)
+            self.terminal.set_cwd(workspace_dir)
+
+    def _open_workspace_dialog(self):
+        path = QFileDialog.getExistingDirectory(self, "Open Folder")
+        if path:
+            self.workspace_panel.set_workspace(path)
+            self.settings_data["workspace_dir"] = path
+            save_settings(self.settings_data)
+            if hasattr(self, 'terminal'):
+                self.terminal.set_cwd(path)
+
+    def _toggle_chat_panel(self):
+        visible = self.chat_panel.isVisible()
+        self.chat_panel.setVisible(not visible)
+
+    def _toggle_terminal(self):
+        visible = self.terminal.isVisible()
+        self.terminal.setVisible(not visible)
+        if not visible:
+            self.center_splitter.setSizes([500, 200])
+            self.terminal.cmd_input.setFocus()
+        else:
+            self.center_splitter.setSizes([600, 0])
+
+    def _save_workspace_file(self):
+        if self.workspace_panel.save_current_file():
+            self.status_label.setText("File saved")
+
     def _escape_handler(self):
         if self.search_bar.isVisible():
             self.search_bar._close()
@@ -3378,6 +4300,113 @@ class MainWindow(QMainWindow):
             except (json.JSONDecodeError, OSError):
                 pass
 
+    def _save_code_block(self, code_block_index):
+        if not self.current_conv:
+            return
+        messages = self.current_conv.get("messages", [])
+        code_blocks = []
+        for msg in messages:
+            if msg["role"] == "assistant":
+                blocks = re.findall(
+                    r'```(\w*)\n(.*?)```',
+                    msg["content"], re.DOTALL
+                )
+                code_blocks.extend(blocks)
+
+        if code_block_index < 0 or code_block_index >= len(code_blocks):
+            self.status_label.setText("Code block not found")
+            return
+
+        lang, code = code_blocks[code_block_index]
+        ext_map = {
+            'python': '.py', 'python3': '.py', 'py': '.py',
+            'javascript': '.js', 'js': '.js', 'typescript': '.ts', 'ts': '.ts',
+            'html': '.html', 'css': '.css', 'json': '.json',
+            'bash': '.sh', 'sh': '.sh', 'shell': '.sh',
+            'java': '.java', 'cpp': '.cpp', 'c': '.c', 'go': '.go',
+            'rust': '.rs', 'ruby': '.rb', 'php': '.php', 'sql': '.sql',
+            'yaml': '.yaml', 'yml': '.yml', 'toml': '.toml',
+            'xml': '.xml', 'markdown': '.md', 'md': '.md',
+            'r': '.r', 'swift': '.swift', 'kotlin': '.kt',
+            'lua': '.lua', 'perl': '.pl',
+        }
+        ext = ext_map.get(lang.lower(), '.txt')
+        default_name = f"code{ext}"
+
+        workspace = self._get_workspace_dir()
+        start_dir = str(workspace) if workspace else str(Path.home())
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Code", os.path.join(start_dir, default_name),
+            f"All files (*)"
+        )
+        if path:
+            try:
+                with open(path, "w") as f:
+                    f.write(code)
+                self.status_label.setText(f"Saved to {Path(path).name}")
+                if hasattr(self, '_file_tree') and self._file_tree.isVisible():
+                    self._refresh_file_tree()
+            except OSError as e:
+                QMessageBox.warning(self, "Error", f"Failed to save: {e}")
+
+    def _get_workspace_dir(self):
+        if hasattr(self, 'workspace_panel') and self.workspace_panel.get_workspace_dir():
+            return self.workspace_panel.get_workspace_dir()
+        return Path(self.settings_data.get("workspace_dir", "")) if self.settings_data.get("workspace_dir") else None
+
+    def _refresh_file_tree(self):
+        if hasattr(self, 'workspace_panel'):
+            self.workspace_panel._refresh_tree()
+
+    def _apply_code_block(self, code_block_index):
+        if not self.current_conv:
+            return
+        messages = self.current_conv.get("messages", [])
+        code_blocks = []
+        for msg in messages:
+            if msg["role"] == "assistant":
+                blocks = re.findall(
+                    r'```(\w*)\n(.*?)```',
+                    msg["content"], re.DOTALL
+                )
+                code_blocks.extend(blocks)
+
+        if code_block_index < 0 or code_block_index >= len(code_blocks):
+            self.status_label.setText("Code block not found")
+            return
+
+        lang, code = code_blocks[code_block_index]
+        workspace = self._get_workspace_dir()
+        if not workspace:
+            if not self.workspace_panel.isVisible():
+                self._toggle_workspace()
+            self.workspace_panel._open_workspace()
+            workspace = self.workspace_panel.get_workspace_dir()
+            if not workspace:
+                return
+
+        ext_map = {
+            'python': '.py', 'python3': '.py', 'py': '.py',
+            'javascript': '.js', 'js': '.js', 'typescript': '.ts', 'ts': '.ts',
+            'html': '.html', 'css': '.css', 'json': '.json',
+            'bash': '.sh', 'sh': '.sh', 'shell': '.sh',
+            'java': '.java', 'cpp': '.cpp', 'c': '.c', 'go': '.go',
+            'rust': '.rs', 'ruby': '.rb', 'php': '.php', 'sql': '.sql',
+        }
+        ext = ext_map.get(lang.lower(), '.txt')
+        default_name = f"code{ext}"
+
+        name, ok = QInputDialog.getText(
+            self, "Apply to File", "Filename:", text=default_name
+        )
+        if ok and name.strip():
+            filepath = workspace / name.strip()
+            self.workspace_panel.write_to_file(str(filepath), code)
+            self.status_label.setText(f"Applied to {name.strip()}")
+            if not self.workspace_panel.isVisible():
+                self._toggle_workspace()
+
     def _execute_code_block(self, code_block_index):
         if not self.current_conv:
             return
@@ -3433,6 +4462,13 @@ class MainWindow(QMainWindow):
         if state:
             self.restoreState(state)
 
+    def _remind_upgrade(self):
+        QMessageBox.information(self, "Upgrade Available", 
+            "You are running the old version of Synapse.\n\n"
+            "To use Frictionless Mode and Summarization, please restart using:\n"
+            "sh run_synapse.sh\n\n"
+            "This will launch the new modular version with all the 'beefy' features!")
+
     def closeEvent(self, event):
         settings = QSettings(APP_NAME, APP_NAME)
         settings.setValue("geometry", self.saveGeometry())
@@ -3448,6 +4484,10 @@ class MainWindow(QMainWindow):
             self._gpu_monitor.wait(2000)
         if hasattr(self, '_draft_timer'):
             self._draft_timer.stop()
+        ws = self.workspace_panel.get_workspace_dir()
+        if ws:
+            self.settings_data["workspace_dir"] = str(ws)
+            save_settings(self.settings_data)
         super().closeEvent(event)
 
 
@@ -3456,8 +4496,10 @@ def main():
     app.setApplicationName(APP_NAME)
     app.setStyleSheet(DARK_THEME_QSS)
 
+    log.info("Starting Synapse...")
     window = MainWindow()
     window.show()
+    log.info("Synapse ready")
 
     sys.exit(app.exec_())
 
