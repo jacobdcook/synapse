@@ -1,4 +1,5 @@
 import re
+import json
 import markdown
 import html as html_module
 from pygments.formatters import HtmlFormatter
@@ -78,11 +79,50 @@ class ChatRenderer:
             msgs_html = self._build_welcome()
         else:
             global_code_idx = 0
+            tool_idx = 0
             for idx, msg in enumerate(messages):
                 role = msg.get("role", "assistant")
-                if role in ("tool_results", "tool"):
+
+                # Render tool_results as collapsible blocks
+                if role == "tool_results":
+                    tool_calls_msg = messages[idx - 1] if idx > 0 else {}
+                    tcs = tool_calls_msg.get("tool_calls", [])
+                    results = msg.get("tool_results", [])
+                    for i, tr in enumerate(results):
+                        tc = tcs[i] if i < len(tcs) else {}
+                        tc_name = tc.get("function", {}).get("name", "tool")
+                        tc_args = tc.get("function", {}).get("arguments", {})
+                        result_text = str(tr.get("content", ""))
+                        is_err = result_text.startswith("Error") or "rejected" in result_text.lower()
+                        icon_cls = "tool-err" if is_err else "tool-ok"
+                        icon_char = "&#10007;" if is_err else "&#10003;"
+                        display_name = tc_name.replace("mcp__github__", "github/").replace("mcp__", "")
+                        args_summary = self._tool_args_summary(tc_args)
+                        result_escaped = html_module.escape(result_text[:2000])
+                        args_escaped = html_module.escape(json.dumps(tc_args, indent=2)[:1000]) if tc_args else ""
+                        tid = f"t{tool_idx}"
+                        tool_idx += 1
+                        args_section = f'<div class="tool-label">Input</div><div class="tool-output">{args_escaped}</div>' if args_escaped else ""
+                        msgs_html += (
+                            f'<div class="tool-block">'
+                            f'  <div class="tool-header" onclick="toggleTool(\'{tid}\')">'
+                            f'    <span class="tool-icon {icon_cls}">{icon_char}</span>'
+                            f'    <span class="tool-name">{display_name}</span>'
+                            f'    <span class="tool-summary">{args_summary}</span>'
+                            f'    <span id="toolchev-{tid}" class="tool-chevron">&#9654;</span>'
+                            f'  </div>'
+                            f'  <div id="toolbody-{tid}" class="tool-body">'
+                            f'    {args_section}'
+                            f'    <div class="tool-label">Output</div>'
+                            f'    <div class="tool-output">{result_escaped}</div>'
+                            f'  </div>'
+                            f'</div>\n'
+                        )
+                    continue
+                if role == "tool":
                     continue
                 content = str(msg.get("content", ""))
+                # Show tool call message as a heading, skip if empty text
                 if role == "assistant" and not content.strip() and msg.get("tool_calls"):
                     continue
 
@@ -188,6 +228,23 @@ class ChatRenderer:
                 tps = msg["tokens"] / (msg["duration_ms"] / 1000)
                 parts.append(f"{tps:.1f} tok/s")
         return f'<div class="msg-meta">{" &middot; ".join(parts)}</div>'
+
+    @staticmethod
+    def _tool_args_summary(args):
+        if not args:
+            return ""
+        if isinstance(args, str):
+            return html_module.escape(args[:60])
+        parts = []
+        for k, v in args.items():
+            val = str(v)
+            if len(val) > 40:
+                val = val[:37] + "..."
+            parts.append(f"{k}={val}")
+        summary = ", ".join(parts)
+        if len(summary) > 80:
+            summary = summary[:77] + "..."
+        return html_module.escape(summary)
 
     @staticmethod
     def _build_welcome():

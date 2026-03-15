@@ -259,6 +259,7 @@ class MainWindow(QMainWindow):
         self.input_widget = InputWidget()
         self.input_widget.message_submitted.connect(self._send_message)
         self.input_widget.stop_btn.clicked.connect(self._stop_generation)
+        self.input_widget.force_send_requested.connect(self._force_send_next)
         chat_layout.addWidget(self.input_widget)
         
         self.content_splitter.addWidget(self.chat_panel)
@@ -612,12 +613,14 @@ class MainWindow(QMainWindow):
             if any("github" in n for n in tool_names):
                 gh_user = self.settings_data.get("github_username", "")
                 if gh_user:
-                    mcp_hint += f"- The GitHub user is '{gh_user}'. When asked about 'my repos/issues/PRs', search for owner:{gh_user}. Use mcp__github__search_repositories with 'user:{gh_user}' to list their repos.\n"
-                    mcp_hint += "- NEVER ask the user for their GitHub username — you already know it.\n"
+                    mcp_hint += f"- The GitHub account owner is '{gh_user}'. This is NOT optional context — use it.\n"
+                    mcp_hint += f"- For 'my repos': call mcp__github__search_repositories with query 'user:{gh_user}'\n"
+                    mcp_hint += f"- For 'my issues/PRs': call mcp__github__search_issues with query 'author:{gh_user}'\n"
+                    mcp_hint += f"- For 'list my repos': call mcp__github__search_repositories with query 'user:{gh_user}' — do NOT ask for the username, you already have it.\n"
                 else:
                     mcp_hint += "- When asked about 'my repos', call mcp__github__get_me first to get the username, then search with that.\n"
-            mcp_hint += "- Always call the relevant tool instead of saying you can't or asking for info you can look up.\n"
-            mcp_hint += f"- Available tools: {', '.join(tool_names[:10])}\n"
+            mcp_hint += "- ALWAYS call the relevant tool. NEVER say you can't do something if a tool exists for it.\n"
+            mcp_hint += "- NEVER ask the user for information you can look up with a tool call.\n"
             system_prompt = (system_prompt + mcp_hint) if system_prompt else mcp_hint.strip()
 
         self.worker = OllamaWorker(
@@ -645,6 +648,73 @@ class MainWindow(QMainWindow):
 
     def _set_streaming_state(self, streaming):
         self.input_widget.set_streaming(streaming)
+
+    def _inject_tool_status(self, name, args, status="running"):
+        """Inject a live tool status block into the chat via JS."""
+        idx = self._active_stream_tab_index if self._active_stream_tab_index >= 0 else self.chat_tabs.currentIndex()
+        if idx < 0:
+            return
+        tab_widget = self.chat_tabs.widget(idx)
+        if not tab_widget:
+            return
+        view = tab_widget.findChild(QWebEngineView)
+        if not view:
+            return
+        import html as html_mod
+        display_name = name.replace("mcp__github__", "github/").replace("mcp__", "")
+        args_summary = ""
+        if isinstance(args, dict):
+            parts = []
+            for k, v in args.items():
+                val = str(v)
+                if len(val) > 40:
+                    val = val[:37] + "..."
+                parts.append(f"{k}={val}")
+            args_summary = ", ".join(parts)[:80]
+        args_summary = html_mod.escape(args_summary).replace("'", "\\'")
+        display_name = html_mod.escape(display_name).replace("'", "\\'")
+
+        if status == "running":
+            icon_cls = "tool-wait"
+            icon_char = "&#9679;"
+            extra_cls = " tool-running"
+        elif status == "done":
+            icon_cls = "tool-ok"
+            icon_char = "&#10003;"
+            extra_cls = ""
+        else:
+            icon_cls = "tool-err"
+            icon_char = "&#10007;"
+            extra_cls = ""
+
+        js = (
+            f"(function(){{"
+            f"var old=document.getElementById('tool-live');if(old)old.remove();"
+            f"var d=document.createElement('div');"
+            f"d.id='tool-live';"
+            f"d.className='tool-block{extra_cls}';"
+            f"d.innerHTML='"
+            f"<div class=\"tool-header\">"
+            f"<span class=\"tool-icon {icon_cls}\">{icon_char}</span>"
+            f"<span class=\"tool-name\">{display_name}</span>"
+            f"<span class=\"tool-summary\">{args_summary}</span>"
+            f"</div>';"
+            f"document.body.appendChild(d);"
+            f"window.scrollTo(0,document.body.scrollHeight);"
+            f"}})();"
+        )
+        view.page().runJavaScript(js)
+
+    def _remove_tool_live(self):
+        idx = self._active_stream_tab_index if self._active_stream_tab_index >= 0 else self.chat_tabs.currentIndex()
+        if idx < 0:
+            return
+        tab_widget = self.chat_tabs.widget(idx)
+        if not tab_widget:
+            return
+        view = tab_widget.findChild(QWebEngineView)
+        if view:
+            view.page().runJavaScript("var el=document.getElementById('tool-live');if(el)el.remove();")
 
     def _on_tool_calls(self, tool_calls):
         if self.worker:
@@ -701,6 +771,8 @@ class MainWindow(QMainWindow):
 
             if approved:
                 self.status_label.setText(f"Running tool: {name}...")
+                self._inject_tool_status(name, args, "running")
+                QApplication.processEvents()
 
                 # Three-tier dispatch: built-in, plugin, then MCP
                 res = self.tool_executor.registry.execute(name, args)  # returns None if not found
@@ -716,11 +788,13 @@ class MainWindow(QMainWindow):
                 if res is None:
                     res = f"Error: No handler found for tool '{name}'."
 
+                self._remove_tool_live()
                 results.append({"id": tc.get("id"), "content": res})
                 self._start_indexing() # Always re-index after tool use to stay in sync
                 if name == "write_file":
                     self.workspace_panel.refresh()
             else:
+                self._remove_tool_live()
                 results.append({"id": tc.get("id"), "content": "User rejected the tool execution."})
         
         conv = self._active_stream_conv or self.current_conv
@@ -854,10 +928,9 @@ class MainWindow(QMainWindow):
         if not self.isActiveWindow() and self.settings_data.get("notifications", True):
             self._notify_completion(conv.get("title", "Chat"), msg["tokens"])
 
-        queued = self.input_widget.text_edit.toPlainText().strip()
+        queued = self.input_widget.pop_queued_message()
         if queued:
-            self.input_widget.text_edit.clear()
-            self._send_message(queued)
+            self._send_message(queued["text"], queued.get("images"), queued.get("files"))
 
     def _notify_completion(self, title, tokens):
         try:
@@ -1251,6 +1324,12 @@ class MainWindow(QMainWindow):
         self._active_stream_tab_index = -1
         self.status_label.setText("Generation stopped")
 
+    def _force_send_next(self):
+        self._stop_generation()
+        queued = self.input_widget.pop_queued_message()
+        if queued:
+            self._send_message(queued["text"], queued.get("images"), queued.get("files"))
+
     def _restore_geometry(self):
         settings = QSettings(APP_NAME, APP_NAME)
         geo = settings.value("geometry")
@@ -1263,6 +1342,10 @@ class MainWindow(QMainWindow):
     def _on_workspace_changed(self, path):
         self.terminal.set_cwd(path)
         self.git_panel.set_workspace(path)
+        self.settings_data["workspace_dir"] = path
+        self.settings_data["recent_projects"] = self.workspace_panel.get_recent_projects()
+        save_settings(self.settings_data)
+        self._start_indexing()
 
     def _on_git_status_changed(self, branch, count):
         suffix = f" ({count})" if count else ""
@@ -1292,6 +1375,8 @@ class MainWindow(QMainWindow):
         self.mcp_status_label.setToolTip(f"Connected: {names}" if names else "No MCP servers connected")
 
     def _restore_workspace(self):
+        recent = self.settings_data.get("recent_projects", [])
+        self.workspace_panel.set_recent_projects(recent)
         ws = self.settings_data.get("workspace_dir")
         if ws:
             self.workspace_panel.set_workspace(ws)

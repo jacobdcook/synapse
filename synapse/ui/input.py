@@ -200,14 +200,66 @@ class _ChatTextEdit(QPlainTextEdit):
         self.slash_requested.emit(prefix, global_pos)
 
 
+class _QueueDisplay(QWidget):
+    """Shows queued messages as dismissible chips above the input."""
+    remove_requested = pyqtSignal(int)
+    force_send_requested = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(48, 0, 48, 0)
+        self._layout.setSpacing(3)
+        self.hide()
+
+    def update_queue(self, queue):
+        while self._layout.count():
+            item = self._layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        if not queue:
+            self.hide()
+            return
+        for i, entry in enumerate(queue):
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(4)
+            num_label = QLabel(f"#{i+1}")
+            num_label.setStyleSheet("color: #888; font-size: 10px; min-width: 20px;")
+            row_layout.addWidget(num_label)
+            preview = entry["text"][:80] + ("..." if len(entry["text"]) > 80 else "")
+            text_label = QLabel(preview)
+            text_label.setStyleSheet(
+                "color: #ccc; font-size: 11px; background: #2a2d32; border-radius: 4px; "
+                "padding: 3px 8px; border-left: 2px solid #4fc3f7;"
+            )
+            text_label.setWordWrap(False)
+            row_layout.addWidget(text_label, stretch=1)
+            close_btn = QPushButton("\u00d7")
+            close_btn.setFixedSize(18, 18)
+            close_btn.setStyleSheet(
+                "QPushButton { color: #888; background: transparent; border: none; font-size: 12px; }"
+                "QPushButton:hover { color: #ff6b6b; }"
+            )
+            idx = i
+            close_btn.clicked.connect(lambda checked, x=idx: self.remove_requested.emit(x))
+            row_layout.addWidget(close_btn)
+            self._layout.addWidget(row)
+        self.show()
+
+
 class InputWidget(QWidget):
     message_submitted = pyqtSignal(str, list, list)  # text, images, file_attachments
+    force_send_requested = pyqtSignal()  # stop current generation, send next queued
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._attached_images = []
         self._attached_files = []
         self._workspace_files = []
+        self._streaming = False
+        self._message_queue = []  # list of {"text": str, "images": list, "files": list}
 
         outer_layout = QVBoxLayout(self)
         outer_layout.setContentsMargins(12, 4, 12, 12)
@@ -220,6 +272,11 @@ class InputWidget(QWidget):
         self.preview_layout.addStretch()
         self.preview_area.hide()
         outer_layout.addWidget(self.preview_area)
+
+        self._queue_display = _QueueDisplay()
+        self._queue_display.remove_requested.connect(self._remove_from_queue)
+        self._queue_display.force_send_requested.connect(self.force_send_requested.emit)
+        outer_layout.addWidget(self._queue_display)
 
         input_row = QHBoxLayout()
         input_row.setSpacing(8)
@@ -259,6 +316,18 @@ class InputWidget(QWidget):
         self.send_btn.clicked.connect(self._submit)
         input_row.addWidget(self.send_btn, alignment=Qt.AlignBottom)
 
+        self.force_btn = QPushButton("\u21e7")
+        self.force_btn.setObjectName("forceBtn")
+        self.force_btn.setToolTip("Force send — stops current generation and sends this message")
+        self.force_btn.setFixedSize(36, 36)
+        self.force_btn.setStyleSheet(
+            "QPushButton { background: #c0392b; color: white; border: none; border-radius: 6px; font-size: 16px; font-weight: bold; }"
+            "QPushButton:hover { background: #e74c3c; }"
+        )
+        self.force_btn.hide()
+        self.force_btn.clicked.connect(self._force_send)
+        input_row.addWidget(self.force_btn, alignment=Qt.AlignBottom)
+
         self.stop_btn = QPushButton("\u25a0")
         self.stop_btn.setObjectName("stopBtn")
         self.stop_btn.setToolTip("Stop generating")
@@ -292,15 +361,60 @@ class InputWidget(QWidget):
         text = self.text_edit.toPlainText().strip()
         images = [img[1] for img in self._attached_images]
         files = list(self._attached_files)
-        if text or images or files:
+        if not (text or images or files):
+            return
+        if self._streaming:
+            self._message_queue.append({"text": text, "images": images, "files": files})
+            self.text_edit.clear()
+            self._clear_attachments()
+            self._queue_display.update_queue(self._message_queue)
+        else:
             self.message_submitted.emit(text, images, files)
             self.text_edit.clear()
             self._clear_attachments()
 
+    def _force_send(self):
+        text = self.text_edit.toPlainText().strip()
+        images = [img[1] for img in self._attached_images]
+        files = list(self._attached_files)
+        if text or images or files:
+            self._message_queue.insert(0, {"text": text, "images": images, "files": files})
+            self.text_edit.clear()
+            self._clear_attachments()
+            self._queue_display.update_queue(self._message_queue)
+        if self._message_queue:
+            self.force_send_requested.emit()
+
+    def _remove_from_queue(self, index):
+        if 0 <= index < len(self._message_queue):
+            self._message_queue.pop(index)
+            self._queue_display.update_queue(self._message_queue)
+
+    def pop_queued_message(self):
+        if self._message_queue:
+            msg = self._message_queue.pop(0)
+            self._queue_display.update_queue(self._message_queue)
+            return msg
+        return None
+
+    def clear_queue(self):
+        self._message_queue.clear()
+        self._queue_display.update_queue(self._message_queue)
+
+    def has_queued(self):
+        return len(self._message_queue) > 0
+
     def set_streaming(self, streaming):
+        self._streaming = streaming
         self.send_btn.setVisible(not streaming)
         self.stop_btn.setVisible(streaming)
         self.attach_btn.setEnabled(not streaming)
+        self.force_btn.setVisible(streaming)
+        if streaming:
+            self.text_edit.setPlaceholderText("Type to queue next message... (Enter to queue, force-send button to interrupt)")
+        else:
+            self.text_edit.setPlaceholderText("Type a message... (Enter to send, Shift+Enter for new line, @ to mention file)")
+            self._queue_display.update_queue(self._message_queue)
 
     def focus_input(self):
         self.text_edit.setFocus()

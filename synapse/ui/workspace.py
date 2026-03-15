@@ -4,7 +4,7 @@ from pathlib import Path
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTreeWidget, QTreeWidgetItem,
     QTabWidget, QFileDialog, QPlainTextEdit, QPushButton, QLabel,
-    QShortcut, QSplitter
+    QShortcut, QSplitter, QMenu, QToolButton
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QFileSystemWatcher
 from PyQt5.QtGui import QKeySequence
@@ -21,6 +21,7 @@ class WorkspacePanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._workspace_dir = None
+        self._recent_projects = []
         self.watcher = QFileSystemWatcher(self)
         self.watcher.directoryChanged.connect(self.refresh)
         self._setup_ui()
@@ -33,6 +34,11 @@ class WorkspacePanel(QWidget):
         open_btn = QPushButton("Open Folder")
         open_btn.clicked.connect(self._pick_folder)
         btn_row.addWidget(open_btn)
+        self.recent_btn = QToolButton()
+        self.recent_btn.setText("Recent")
+        self.recent_btn.setPopupMode(QToolButton.InstantPopup)
+        self.recent_btn.setMenu(QMenu(self))
+        btn_row.addWidget(self.recent_btn)
         btn_row.addStretch()
         layout.addLayout(btn_row)
 
@@ -52,8 +58,32 @@ class WorkspacePanel(QWidget):
         self._workspace_dir = Path(path)
         if self._workspace_dir.exists():
             self.watcher.addPath(str(self._workspace_dir))
+        self._add_to_recent(str(path))
         self.refresh()
         self.workspace_changed.emit(str(self._workspace_dir))
+
+    def set_recent_projects(self, projects):
+        self._recent_projects = list(projects or [])
+        self._update_recent_menu()
+
+    def _add_to_recent(self, path):
+        if path in self._recent_projects:
+            self._recent_projects.remove(path)
+        self._recent_projects.insert(0, path)
+        self._recent_projects = self._recent_projects[:10]
+        self._update_recent_menu()
+
+    def get_recent_projects(self):
+        return self._recent_projects
+
+    def _update_recent_menu(self):
+        menu = self.recent_btn.menu()
+        menu.clear()
+        for p in self._recent_projects:
+            name = Path(p).name
+            action = menu.addAction(f"{name}  ({p})")
+            action.setData(p)
+            action.triggered.connect(lambda checked, path=p: self.set_workspace(path))
 
     def get_workspace_dir(self):
         return self._workspace_dir
