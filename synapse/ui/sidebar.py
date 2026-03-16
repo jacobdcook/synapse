@@ -350,7 +350,9 @@ class SidebarWidget(QWidget):
 
     def _duplicate_chat(self, conv_id):
         conv = self.store.load(conv_id)
-        if conv:
+        if not conv:
+            return
+        try:
             import copy
             new_conv = copy.deepcopy(conv)
             new_conv["id"] = str(uuid.uuid4())
@@ -358,6 +360,8 @@ class SidebarWidget(QWidget):
             new_conv["updated_at"] = datetime.now().isoformat()
             self.store.save(new_conv)
             self.refresh(select_id=new_conv["id"])
+        except Exception as e:
+            log.error(f"Failed to duplicate chat: {e}")
 
     def _edit_tags(self, conv_id):
         conv = self.store.load(conv_id)

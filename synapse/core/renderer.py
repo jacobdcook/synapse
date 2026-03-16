@@ -73,7 +73,7 @@ class ChatRenderer:
                 if inner:
                     mermaid_src = html_module.unescape(inner.group(1))
                     mermaid_src = re.sub(r'<script[^>]*>.*?</script>', '', mermaid_src, flags=re.DOTALL | re.IGNORECASE)
-                    mermaid_src = re.sub(r'\bon\w+\s*=', '', mermaid_src)
+                    mermaid_src = re.sub(r'\bon\w+\s*=', '', mermaid_src, flags=re.IGNORECASE)
                     btns = f'<button class="cb-btn cb-preview" onclick="window.location.href=\'action://previewartifact/{ci}\'">&#128065; Open in Canvas</button>'
                     return (
                         f'<div class="code-block">'

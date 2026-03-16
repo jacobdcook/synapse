@@ -238,3 +238,6 @@ class ImageGenerator(QObject):
     def _cleanup_worker(self, worker):
         if worker in self._workers:
             self._workers.remove(worker)
+        worker.quit()
+        worker.wait(3000)
+        worker.deleteLater()

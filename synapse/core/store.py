@@ -16,7 +16,7 @@ class ConversationStore:
         convos = []
         for f in CONV_DIR.glob("*.json"):
             try:
-                with open(f) as fh:
+                with open(f, encoding="utf-8") as fh:
                     data = json.load(fh)
                     # Skip empty "New Chat" entries to prevent clutter
                     messages = data.get("messages", [])
@@ -44,8 +44,11 @@ class ConversationStore:
     def load(self, conv_id):
         path = CONV_DIR / f"{conv_id}.json"
         if path.exists():
-            with open(path) as f:
-                return json.load(f)
+            try:
+                with open(path, encoding="utf-8") as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                log.error(f"Corrupted conversation file {conv_id}: {e}")
         return None
 
     def save(self, conversation):

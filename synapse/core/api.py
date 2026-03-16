@@ -1,6 +1,5 @@
 import json
 import urllib.request
-import urllib.error
 import logging
 import time
 from PyQt5.QtCore import QThread, pyqtSignal

@@ -75,6 +75,8 @@ class CodeExecutor:
         """
         Injects logic to handle matplotlib plots without a GUI.
         """
+        run_dir_repr = repr(str(run_dir))
+        ws_dir_repr = repr(str(self.workspace_dir))
         prefix = f"""
 import os
 import sys
@@ -82,19 +84,18 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-# Intercept show() to save figures instead
+_run_dir = {run_dir_repr}
 _original_show = plt.show
 def _intercepted_show(*args, **kwargs):
     fig_count = len(plt.get_fignums())
     if fig_count > 0:
         for i in plt.get_fignums():
-            plt.figure(i).savefig(os.path.join(r'{run_dir}', f'plot_{{i}}_{{len(os.listdir(r"{run_dir}"))}}.png'))
+            plt.figure(i).savefig(os.path.join(_run_dir, f'plot_{{i}}_{{len(os.listdir(_run_dir))}}.png'))
     plt.close('all')
 
 plt.show = _intercepted_show
 
-# Ensure workspace is in path
-sys.path.insert(0, r'{self.workspace_dir}')
+sys.path.insert(0, {ws_dir_repr})
 """
         # Append auto-save for any remaining figures at the end
         suffix = f"""
