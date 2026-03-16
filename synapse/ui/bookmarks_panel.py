@@ -1,12 +1,15 @@
+import json
+import logging
+from pathlib import Path
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QListWidget,
     QListWidgetItem, QPushButton, QHBoxLayout, QFrame
 )
 from PyQt5.QtCore import pyqtSignal, Qt
 from PyQt5.QtGui import QColor
-import json
-from pathlib import Path
 from ..utils.constants import CONV_DIR
+
+log = logging.getLogger(__name__)
 
 class BookmarksPanel(QWidget):
     bookmark_selected = pyqtSignal(str, str) # conv_id, message_id
@@ -56,7 +59,8 @@ class BookmarksPanel(QWidget):
                     for msg in data.get("messages", []):
                         if msg.get("bookmarked"):
                             self._add_bookmark_item(conv_id, conv_title, msg)
-            except Exception:
+            except Exception as e:
+                log.warning(f"Failed to load bookmarks from {f.name}: {e}")
                 continue
 
         if self.list_widget.count() == 0:

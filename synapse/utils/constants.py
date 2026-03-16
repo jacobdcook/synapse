@@ -64,6 +64,8 @@ TAG_COLORS = {
 # UI Defaults
 DEFAULT_MODEL = "huihui_ai/qwen3.5-abliterated:27b-Claude"
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
+DEFAULT_SD_URL = "http://127.0.0.1:7860"
+DEFAULT_COMFYUI_URL = "http://127.0.0.1:8188"
 DEFAULT_GEN_PARAMS = {"temperature": 0.7, "top_p": 0.9, "num_ctx": 4096, "streaming_delay": 0.0}
 DEFAULT_SYSTEM_PROMPT = """You are Synapse, a powerful AI coding assistant.
 You have access to advanced tools and long-term memory.

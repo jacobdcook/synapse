@@ -1,5 +1,6 @@
 import json
 import random
+import logging
 from pathlib import Path
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTextEdit, QLabel,
@@ -7,6 +8,8 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt
 from ..utils.constants import CONFIG_DIR
+
+log = logging.getLogger(__name__)
 
 ELO_FILE = CONFIG_DIR / "arena_elo.json"
 
@@ -168,15 +171,15 @@ class ArenaDialog(QDialog):
         try:
             if ELO_FILE.exists():
                 return json.loads(ELO_FILE.read_text())
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"Failed to load ELO ratings: {e}")
         return {}
 
     def _save_elo(self):
         try:
             ELO_FILE.write_text(json.dumps(self.elo, indent=2))
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"Failed to save ELO ratings: {e}")
 
     def _format_elo(self):
         if not self.elo:

@@ -1630,8 +1630,8 @@ class MainWindow(QMainWindow):
                     APP_NAME, f"Response complete: {tokens} tokens in '{title}'",
                     QSystemTrayIcon.Information, 3000
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug(f"Tray notification failed: {e}")
 
     def _on_worker_error(self, err_msg):
         if self._stream_timer.isActive():

@@ -131,8 +131,8 @@ class VoiceManager(QObject):
             try:
                 self._stream.stop()
                 self._stream.close()
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug(f"Stream cleanup: {e}")
             self._stream = None
         
         self.recording_status.emit(False)
@@ -178,8 +178,8 @@ class VoiceManager(QObject):
             try:
                 self._playback_process.terminate()
                 self._playback_process = None
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug(f"Playback stop cleanup: {e}")
         self.playback_status.emit(False)
 
     def speak(self, text, voice="en-US-AndrewNeural"):

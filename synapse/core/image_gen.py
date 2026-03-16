@@ -7,6 +7,7 @@ import uuid
 from pathlib import Path
 from datetime import datetime, timezone
 from PyQt5.QtCore import QObject, pyqtSignal, QThread
+from ..utils.constants import DEFAULT_SD_URL, DEFAULT_COMFYUI_URL
 
 from ..utils.constants import CONFIG_DIR
 
@@ -42,7 +43,7 @@ class ImageGenWorker(QThread):
 
     def _run_sd(self):
         """Stable Diffusion A1111/Forge API implementation."""
-        url = self.params.get("url", "http://127.0.0.1:7860")
+        url = self.params.get("url", DEFAULT_SD_URL)
         endpoint = f"{url.rstrip('/')}/sdapi/v1/txt2img"
         
         payload = {
@@ -140,7 +141,7 @@ class ImageGenWorker(QThread):
     def _run_comfy(self):
         """ComfyUI API — builds a minimal txt2img workflow and polls for result."""
         import time
-        url = self.params.get("url", "http://127.0.0.1:8188")
+        url = self.params.get("url", DEFAULT_COMFYUI_URL)
         prompt_text = self.params.get("prompt", "")
         neg = self.params.get("negative_prompt", "")
         steps = self.params.get("steps", 20)

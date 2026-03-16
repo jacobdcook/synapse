@@ -135,7 +135,7 @@ class MCPServerConnection(QObject):
                         "capabilities": {},
                         "clientInfo": {
                             "name": "synapse",
-                            "version": "1.0.0"
+                            "version": "3.0.0"
                         }
                     },
                     timeout=15
@@ -157,8 +157,8 @@ class MCPServerConnection(QObject):
                         stderr_out = self._proc.stderr.read(2000) if self._proc.stderr else b""
                         if stderr_out:
                             log.error(f"MCP {self.name} stderr: {stderr_out.decode('utf-8', errors='replace')[:500]}")
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        log.debug(f"MCP {self.name} stderr read failed: {e}")
                     self._proc.terminate()
                     self._proc = None
                 self._schedule_reconnect()
