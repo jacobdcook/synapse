@@ -30,6 +30,10 @@ class ActivityBar(QWidget):
         self._add_action("\U0001f3a8", 10, "Image Generation")
         self._add_action("\u21c4", 11, "Workflows")
         self._add_action("\U0001f516", 12, "Bookmarks")
+        self._add_action("\u2692", 13, "Agent Forge") # Hammer and pick
+        self._add_action("\U0001f6d2", 14, "Marketplace") # Shopping cart
+        self._add_action("\U0001f5d2", 15, "Delegative Board") # Spiral notepad
+        self._add_action("\U0001f3af", 16, "Fine-tuning Studio") # Bullseye
 
         layout.addStretch()
 

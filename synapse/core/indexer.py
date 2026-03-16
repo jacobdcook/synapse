@@ -18,6 +18,7 @@ except ImportError:
 from pathlib import Path
 from PyQt5.QtCore import QThread, pyqtSignal
 from .api import get_embeddings
+from .graph_rag import GraphRAGService
 from ..utils.constants import CONFIG_DIR
 
 log = logging.getLogger(__name__)
@@ -107,6 +108,7 @@ class WorkspaceIndexer(QThread):
     def __init__(self, workspace_dir):
         super().__init__()
         self.workspace_dir = Path(workspace_dir)
+        self.graph_rag = GraphRAGService()
         self.ignore_patterns = [
             '.git', '__pycache__', 'node_modules', '.venv', 'venv', 'env',
             '*.pyc', '*.pyo', '*.so', '*.dll', '*.exe', '*.bin',
@@ -123,6 +125,9 @@ class WorkspaceIndexer(QThread):
             
         index = {}
         files_to_index = []
+        
+        # Clear graph store for fresh indexing
+        self.graph_rag.graph_store.clear()
         
         for root, dirs, files in os.walk(self.workspace_dir):
             if self._stop_flag: break
@@ -145,7 +150,8 @@ class WorkspaceIndexer(QThread):
                 rel_path = str(file_path.relative_to(self.workspace_dir))
                 
                 content = ""
-                if ext in ['.txt', '.md', '.py', '.js', '.html', '.css', '.json', '.sh', '.yml', '.yaml']:
+                supported_text = ['.txt', '.md', '.py', '.js', '.html', '.css', '.json', '.sh', '.yml', '.yaml', '.ts', '.tsx', '.jsx']
+                if ext in supported_text:
                     content = file_path.read_text(errors='replace')
                 elif ext == '.pdf':
                     content = extract_text_from_pdf(file_path)
@@ -156,6 +162,13 @@ class WorkspaceIndexer(QThread):
                 
                 if not content.strip():
                     continue
+                
+                # Symbolic Indexing (G2)
+                if ext == '.py':
+                    try:
+                        self.graph_rag.index_symbols(file_path, content)
+                    except Exception as se:
+                        log.warning(f"Symbol indexing failed for {rel_path}: {se}")
                 
                 # Chunk the content
                 chunks = chunk_text(content)
@@ -170,6 +183,14 @@ class WorkspaceIndexer(QThread):
                             "embedding": embedding,
                             "index": chunk_idx
                         })
+                    
+                    # GraphRAG Knowledge Extraction (G1)
+                    # Limit to first 2 chunks of important files to balance speed/depth
+                    if chunk_idx < 2 and ext in ['.py', '.md', '.js', '.ts', '.tsx', '.jsx']:
+                        try:
+                            self.graph_rag.index_chunk(chunk, metadata={"path": rel_path, "index": chunk_idx})
+                        except Exception as ge:
+                            log.warning(f"GraphRAG extraction failed for {rel_path} chunk {chunk_idx}: {ge}")
                 
                 index[rel_path] = {
                     "name": file_path.name,

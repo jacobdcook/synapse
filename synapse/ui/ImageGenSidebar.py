@@ -58,7 +58,7 @@ class ImageGenSidebar(QWidget):
         provider_layout = QHBoxLayout()
         provider_layout.addWidget(QLabel("Backend:"))
         self.provider_combo = QComboBox()
-        self.provider_combo.addItems(["Stable Diffusion", "ComfyUI", "OpenAI DALL-E 3", "Hugging Face"])
+        self.provider_combo.addItems(["Hugging Face (Free)", "Stable Diffusion", "ComfyUI", "OpenAI DALL-E 3"])
         self.provider_combo.currentIndexChanged.connect(self._on_provider_changed)
         provider_layout.addWidget(self.provider_combo)
         settings_layout.addLayout(provider_layout)
@@ -174,12 +174,12 @@ class ImageGenSidebar(QWidget):
             
         provider = self.provider_combo.currentText()
         backend_id = None
-        if provider == "Stable Diffusion": backend_id = "sd"
-        elif provider == "ComfyUI": backend_id = "comfy"
-        
+        if provider.startswith("Stable Diffusion"): backend_id = "sd"
+        elif provider.startswith("ComfyUI"): backend_id = "comfy"
+
         if not backend_id:
             return
-            
+
         logs = self.backend_manager.get_logs(backend_id)
         if not logs:
             logs = "No logs recorded yet for this session."
@@ -193,12 +193,15 @@ class ImageGenSidebar(QWidget):
     def _update_status(self, bid=None, status=None):
         provider = self.provider_combo.currentText()
         backend_id = None
-        if provider == "Stable Diffusion": backend_id = "sd"
-        elif provider == "ComfyUI": backend_id = "comfy"
-        
+        if provider.startswith("Stable Diffusion"): backend_id = "sd"
+        elif provider.startswith("ComfyUI"): backend_id = "comfy"
+
         if not backend_id:
-            self.status_label.setText("Cloud Backend (Online)")
+            label = "Free Cloud API (No setup needed)" if "Free" in provider else "Cloud Backend (API key required)"
+            self.status_label.setText(label)
             self.status_label.setStyleSheet("font-size: 11px; color: #7ee787;")
+            self.quick_start_btn.hide()
+            self.view_logs_btn.hide()
             return
 
         if self.backend_manager:
@@ -248,12 +251,12 @@ class ImageGenSidebar(QWidget):
             
         provider = self.provider_combo.currentText()
         backend_id = None
-        if provider == "Stable Diffusion": backend_id = "sd"
-        elif provider == "ComfyUI": backend_id = "comfy"
-        
+        if provider.startswith("Stable Diffusion"): backend_id = "sd"
+        elif provider.startswith("ComfyUI"): backend_id = "comfy"
+
         if not backend_id:
             return
-            
+
         status = self.backend_manager.get_status(backend_id)
         if status == "stopped":
             self.backend_manager.start(backend_id)
@@ -261,7 +264,7 @@ class ImageGenSidebar(QWidget):
             self.backend_manager.stop(backend_id)
 
     def _on_gen_clicked(self):
-        providers = ["sd", "comfy", "openai", "hf"]
+        providers = ["hf", "sd", "comfy", "openai"]
         provider = providers[self.provider_combo.currentIndex()]
         params = {
             "prompt": self.prompt_input.text(),
@@ -303,7 +306,7 @@ class ImageGenSidebar(QWidget):
         self.history.clear()
         for ext in ("*.png", "*.jpg", "*.jpeg", "*.webp"):
             for filepath in sorted(GEN_DIR.glob(ext), key=lambda p: p.stat().st_mtime, reverse=True):
-                self._add_image(str(filepath))
+                self.add_to_gallery(str(filepath))
 
     def apply_theme(self, theme):
         bg = theme.get("bg", "#1a1b1e")

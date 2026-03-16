@@ -47,6 +47,7 @@ class TagChip(QPushButton):
 class SidebarWidget(QWidget):
     conversation_selected = pyqtSignal(str)
     new_chat_requested = pyqtSignal()
+    fork_requested = pyqtSignal(str)  # conv_id — fork as new branch
 
     def __init__(self, store, parent=None):
         super().__init__(parent)
@@ -311,7 +312,8 @@ class SidebarWidget(QWidget):
             pin_act = menu.addAction("Unpin" if is_pinned else "Pin")
             rename_act = menu.addAction("Rename")
             duplicate_act = menu.addAction("Duplicate")
-            
+            fork_act = menu.addAction("Fork (new branch)")
+
             # Move Menu
             move_menu = menu.addMenu("Move to Folder")
             for f in DEFAULT_FOLDERS:
@@ -336,6 +338,8 @@ class SidebarWidget(QWidget):
                 self._on_double_click(item, 0)
             elif action == duplicate_act:
                 self._duplicate_chat(conv_id)
+            elif action == fork_act:
+                self.fork_requested.emit(conv_id)
             elif action.parent() == move_menu:
                 self.store.move_to_folder(conv_id, action.data())
                 self.refresh(select_id=conv_id)

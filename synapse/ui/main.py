@@ -25,8 +25,8 @@ from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEnginePage
 from ..utils.constants import (
     APP_NAME, DEFAULT_MODEL, DEFAULT_SYSTEM_PROMPT, DEFAULT_GEN_PARAMS,
     DEFAULT_OLLAMA_URL, RECOMMENDED_MODELS, DEFAULT_SHORTCUTS, DRAFT_FILE,
-    get_ollama_url, set_ollama_url, load_settings, save_settings, format_time,
-    relative_time, estimate_tokens
+    CONFIG_DIR, get_ollama_url, set_ollama_url, load_settings, save_settings,
+    format_time, relative_time, estimate_tokens
 )
 from ..core.api import (
     WorkerFactory, ModelLoader, TitleWorker, SummaryWorker, YouTubeWorker, unload_model, unload_all_models, ConnectionChecker,
@@ -42,6 +42,7 @@ from .workspace import WorkspacePanel, EditorTabs
 from .canvas import CanvasWidget
 from .activity_bar import ActivityBar
 from ..core.indexer import WorkspaceIndexer, search_index, load_index, save_index, extract_text_from_pdf, extract_text_from_docx
+from ..core.graph_rag import GraphRAGService
 from ..core.code_executor import CodeExecutor
 from ..core.agent import ToolExecutor
 from .tool_approval import ToolApprovalDialog
@@ -67,7 +68,7 @@ from .onboarding import OnboardingWizard
 from .template_library import TemplateLibrary
 from .analytics_sidebar import AnalyticsSidebar
 from ..core.analytics import analytics_manager
-from .BranchTreeSidebar import BranchTreeSidebar
+from .tree_visualizer import ConversationTreeSidebar as BranchTreeSidebar
 from .ScheduleSidebar import ScheduleSidebar
 from ..core.scheduler import scheduler
 from .ImageGenSidebar import ImageGenSidebar
@@ -80,10 +81,18 @@ from .playground import PlaygroundPanel
 from .arena_dialog import ArenaDialog
 from .prompt_lab import PromptLab
 from .consensus_dialog import ConsensusDialog
-from .replay_dialog import ReplayDialog
 from ..core.code_extractor import CodeExtractor
 from .shortcuts_dialog import ShortcutsDialog
+from .replay_dialog import ReplayDialog
 from ..core.backend_manager import BackendManager
+from ..core.agent_manager import AgentManager
+from .agent_forge import AgentForgeSidebar
+from .mcp_marketplace import MCPMarketplacePanel
+from ..core.task_manager import TaskManager
+from .task_board import TaskBoardPanel
+from ..core.privacy_filter import PrivacyFilter
+from ..core.lora_manager import LoRAManager
+from .fine_tuning import FineTuningPanel
 
 log = logging.getLogger(__name__)
 
@@ -117,6 +126,7 @@ class MainWindow(QMainWindow):
         self.worker = None
         self.indexer = None
         self.workspace_index = load_index()
+        self.graph_rag = GraphRAGService()
         self.code_executor = CodeExecutor()
         
         # Restore index stats to sidebar if loaded
@@ -126,6 +136,7 @@ class MainWindow(QMainWindow):
         self.voice_manager = VoiceManager()
         self.voice_manager.transcription_result.connect(self._on_transcription_received)
         self.voice_manager.error_occurred.connect(lambda msg: self.status_label.setText(msg))
+        self.agent_manager = AgentManager()
         self.plugin_manager = PluginManager()
         self.plugin_manager.load_all()
         self.mcp_manager = MCPClientManager()
@@ -221,6 +232,7 @@ class MainWindow(QMainWindow):
         self.sidebar = SidebarWidget(self.store)
         self.sidebar.conversation_selected.connect(self._load_conversation)
         self.sidebar.new_chat_requested.connect(self._new_chat)
+        self.sidebar.fork_requested.connect(self._fork_from_sidebar)
         self.sidebar_stack.addWidget(self.sidebar)
 
         self.model_manager = ModelManagerPanel()
@@ -254,6 +266,20 @@ class MainWindow(QMainWindow):
         self.workflow_sidebar = WorkflowSidebar()
         self.bookmarks_panel = BookmarksPanel()
         self.bookmarks_panel.bookmark_selected.connect(self._on_bookmark_selected)
+        
+        self.agent_forge = AgentForgeSidebar(self.agent_manager)
+        self.agent_forge.agent_selected.connect(self._on_agent_selected)
+        
+        self.mcp_marketplace = MCPMarketplacePanel(self.mcp_manager, self.settings_data)
+        
+        self.task_manager = TaskManager(CONFIG_DIR)
+        self.task_board = TaskBoardPanel(self.task_manager, self.agent_manager)
+        self.task_board.execution_requested.connect(self._on_task_execution_requested)
+
+        self.lora_manager = LoRAManager(CONFIG_DIR)
+        self.fine_tuning_panel = FineTuningPanel(self.lora_manager)
+
+        self.privacy_filter = PrivacyFilter(self.settings_data.get("privacy_firewall", False))
 
         # Add knowledge_sidebar, template_library, and analytics_sidebar directly to sidebar_layout
         # and manage their visibility manually, instead of using sidebar_stack
@@ -266,6 +292,10 @@ class MainWindow(QMainWindow):
         sidebar_layout.addWidget(self.image_gen_sidebar)
         sidebar_layout.addWidget(self.workflow_sidebar)
         sidebar_layout.addWidget(self.bookmarks_panel)
+        sidebar_layout.addWidget(self.agent_forge)
+        sidebar_layout.addWidget(self.mcp_marketplace)
+        sidebar_layout.addWidget(self.task_board)
+        sidebar_layout.addWidget(self.fine_tuning_panel)
         
         self.knowledge_sidebar.hide()
         self.template_library.hide()
@@ -275,6 +305,10 @@ class MainWindow(QMainWindow):
         self.image_gen_sidebar.hide()
         self.workflow_sidebar.hide()
         self.bookmarks_panel.hide()
+        self.agent_forge.hide()
+        self.mcp_marketplace.hide()
+        self.task_board.hide()
+        self.fine_tuning_panel.hide()
 
         self.sidebar_stack.setCurrentIndex(1) # Start with Chat sidebar
 
@@ -626,11 +660,43 @@ class MainWindow(QMainWindow):
             self.settings_data["model"] = model_name
             save_settings(self.settings_data)
 
+    def _on_task_execution_requested(self, task):
+        """Triggered when a task moves to DOING and has an agent assigned."""
+        agent_id = task.get("agent_id")
+        if not agent_id: return
+        
+        agent = self.agent_manager.get_agent(agent_id)
+        if not agent:
+            QMessageBox.warning(self, "Agent Not Found", f"Agent '{agent_id}' no longer exists.")
+            return
+
+        # Switch to chat and start a new session
+        self.activity_bar.buttons[1].click() # Select Chat
+        self._new_chat()
+        
+        # Set agent and system prompt
+        conv = self.current_conv
+        if conv:
+            conv["agent_id"] = agent_id
+            conv["system_prompt"] = agent.system_prompt
+            conv["title"] = f"Task: {task['title']}"
+            
+            # Formulate task prompt
+            prompt = f"I am delegating the following task to you:\n\n"
+            prompt += f"**Title**: {task['title']}\n"
+            prompt += f"**Description**: {task['description']}\n"
+            prompt += f"**Priority**: {task['priority']}\n\n"
+            prompt += f"Please execute this task or provide a plan for its completion."
+            
+            self._send_message(prompt)
+            self.status_label.setText(f"Executing task with {agent.name}...")
+
     def _on_activity_changed(self, index):
         # Hide all custom sidebars first
         for w in (self.knowledge_sidebar, self.template_library, self.analytics_sidebar,
                   self.branch_tree_sidebar, self.schedule_sidebar, self.image_gen_sidebar,
-                  self.workflow_sidebar, self.bookmarks_panel):
+                   self.workflow_sidebar, self.bookmarks_panel, self.agent_forge, self.mcp_marketplace,
+                   self.task_board, self.fine_tuning_panel):
             w.hide()
         self.sidebar_stack.show()
 
@@ -666,8 +732,25 @@ class MainWindow(QMainWindow):
             self.sidebar_stack.hide()
             self.bookmarks_panel.refresh()
             self.bookmarks_panel.show()
+        elif index == 13:
+            self.sidebar_stack.hide()
+            self.agent_forge.refresh()
+            self.agent_forge.show()
+        elif index == 14:
+            self.sidebar_stack.hide()
+            self.mcp_marketplace.refresh()
+            self.mcp_marketplace.show()
+        elif index == 15:
+            self.sidebar_stack.hide()
+            self.task_board.refresh()
+            self.task_board.show()
+        elif index == 16:
+            self.sidebar_stack.hide()
+            self.fine_tuning_panel.refresh()
+            self.fine_tuning_panel.show()
         else:
             self.sidebar_stack.setCurrentIndex(index)
+            self.sidebar_stack.show()
         
         # Switch central area based on activity
         if index == 0: # Explorer
@@ -1081,6 +1164,10 @@ class MainWindow(QMainWindow):
                 content += f"\n\n---\nWeb Search Results:\n{search_results}"
                 log.info("Injected web search results for grounding")
             self.status_label.setText("RAG Ready" if self.workspace_index else "Ready")
+
+        # Apply Privacy Firewall if enabled
+        if self.settings_data.get("privacy_firewall", False):
+            content = self.privacy_filter.mask(content)
 
         if text: # Don't add empty user messages for tool continuations
             msg = {
@@ -1892,6 +1979,16 @@ class MainWindow(QMainWindow):
             content = r.get("content", "No snippet available.")
             score = r.get("score", 0.0)
             snippets.append(f"File: {path} (Match Score: {score:.2f})\nRelevant Context:\n{content}\n")
+        
+        # GraphRAG Augmentation (G1)
+        if self._rag_enabled:
+            try:
+                graph_context = self.graph_rag.search(query, results)
+                if graph_context:
+                    snippets.append(f"\n--- Deep Relationship Knowledge ---\n{graph_context}")
+            except Exception as ge:
+                log.warning(f"GraphRAG search failed: {ge}")
+                
         return snippets
 
     def _on_chat_action(self, action, index):
@@ -2146,7 +2243,7 @@ class MainWindow(QMainWindow):
 
     def _duplicate_active_chat(self):
         if self.current_conv:
-            self.sidebar.duplicate_chat(self.current_conv["id"])
+            self.sidebar._duplicate_chat(self.current_conv["id"])
             self.status_label.setText("Conversation duplicated")
 
     def _fork_conversation(self, index):
@@ -2163,6 +2260,13 @@ class MainWindow(QMainWindow):
         self._add_chat_tab(forked)
         self.sidebar.refresh(select_id=forked["id"])
         self.status_label.setText(f"Forked at message {index + 1}")
+
+    def _fork_from_sidebar(self, conv_id):
+        conv = self.store.load(conv_id)
+        if not conv or not conv.get("messages"):
+            return
+        self._load_conversation(conv_id)
+        self._fork_conversation(len(conv["messages"]) - 1)
 
     def _on_navigate_branch(self, index, direction):
         if not self.current_conv:
@@ -3401,6 +3505,22 @@ class MainWindow(QMainWindow):
         if hasattr(self, '_current_theme'):
             dlg.apply_theme(self._current_theme)
         dlg.exec_()
+
+    def _on_agent_selected(self, agent_id):
+        agent = self.agent_manager.get_agent(agent_id)
+        if not agent:
+            return
+            
+        if not self.current_conv:
+            self._new_chat()
+            
+        self.current_conv["system_prompt"] = agent.system_prompt
+        if agent.model:
+            model_index = self.model_combo.findText(agent.model)
+            if model_index >= 0:
+                self.model_combo.setCurrentIndex(model_index)
+            
+        self.status_label.setText(f"Active Agent: {agent.name}")
 
 class ClickableLabel(QLabel):
     clicked = pyqtSignal()

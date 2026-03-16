@@ -168,6 +168,10 @@ class SettingsDialog(QDialog):
         self.workspace_dir = QLineEdit(self.settings_data.get("workspace_dir", ""))
         layout.addRow("Workspace Dir:", self.workspace_dir)
 
+        self.privacy_firewall_check = QCheckBox("Enable Privacy Firewall (Mask PII/API Keys)")
+        self.privacy_firewall_check.setChecked(self.settings_data.get("privacy_firewall", False))
+        layout.addRow(self.privacy_firewall_check)
+
         info = QLabel("Changes take effect after restart for some settings.")
         info.setStyleSheet("color: #8b949e; font-size: 11px;")
         layout.addRow(info)
@@ -648,6 +652,7 @@ class SettingsDialog(QDialog):
         self.settings_data["editor_font_size"] = self.editor_font_spin.value()
         self.settings_data["zoom"] = self.zoom_spin.value()
         self.settings_data["workspace_dir"] = self.workspace_dir.text().strip()
+        self.settings_data["privacy_firewall"] = self.privacy_firewall_check.isChecked()
         self.settings_data["mcp_servers"] = self._mcp_servers
 
         self.settings_data["openai_key"] = self.openai_key.text().strip()
