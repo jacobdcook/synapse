@@ -55,6 +55,9 @@ class ChatRenderer:
                 lang = lang_match.group(1)
             code_content = match.group(0)
 
+            ci = self._code_idx
+            self._code_idx += 1
+
             if lang.lower() == 'mermaid':
                 inner = re.search(r'<code[^>]*>(.*?)</code>', code_content, re.DOTALL)
                 if inner:
@@ -68,8 +71,6 @@ class ChatRenderer:
                     )
 
             lang_label = lang or "text"
-            ci = self._code_idx
-            self._code_idx += 1
 
             lang_lower = lang.lower()
             preview_btn = ""

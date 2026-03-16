@@ -157,7 +157,12 @@ class WorkflowSidebar(QWidget):
             item = QListWidgetItem(wf.name)
             item.setData(Qt.UserRole, wf.id)
             self.wf_list.addItem(item)
-            
+
+        if self.wf_list.count() == 0:
+            item = QListWidgetItem("No workflows yet. Click 'New Workflow' to create one.")
+            item.setFlags(Qt.NoItemFlags)
+            self.wf_list.addItem(item)
+
     def _create_new(self):
         wf = Workflow("Unnamed Workflow")
         self.manager.add_workflow(wf)

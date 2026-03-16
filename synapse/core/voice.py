@@ -11,7 +11,7 @@ try:
 except ImportError:
     np = None
     sd = None
-from PyQt5.QtCore import QObject, pyqtSignal
+from PyQt5.QtCore import QObject, pyqtSignal, QTimer
 
 # Optional dependencies handled at runtime
 # from faster_whisper import WhisperModel
@@ -41,6 +41,10 @@ class VoiceManager(QObject):
         self._silence_start = None
         self.tts_voice = "en-US-AndrewNeural"
 
+    @property
+    def is_recording(self):
+        return self._recording
+
     def _ensure_whisper(self):
         if self.whisper_model is None:
             try:
@@ -59,6 +63,9 @@ class VoiceManager(QObject):
         return True
 
     def start_recording(self, hands_free=False):
+        if sd is None:
+            self.error_occurred.emit("Voice requires: pip install sounddevice numpy")
+            return
         if self._recording:
             return
         
@@ -136,6 +143,9 @@ class VoiceManager(QObject):
         threading.Thread(target=self._process_audio, daemon=True).start()
 
     def _process_audio(self):
+        if np is None:
+            self.error_occurred.emit("Voice requires: pip install numpy")
+            return
         try:
             if not self._audio_data:
                 return

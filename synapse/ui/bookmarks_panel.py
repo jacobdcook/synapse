@@ -1,8 +1,9 @@
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QLabel, QListWidget, 
+    QWidget, QVBoxLayout, QLabel, QListWidget,
     QListWidgetItem, QPushButton, QHBoxLayout, QFrame
 )
 from PyQt5.QtCore import pyqtSignal, Qt
+from PyQt5.QtGui import QColor
 import json
 from pathlib import Path
 from ..utils.constants import CONV_DIR
@@ -57,6 +58,12 @@ class BookmarksPanel(QWidget):
                             self._add_bookmark_item(conv_id, conv_title, msg)
             except Exception:
                 continue
+
+        if self.list_widget.count() == 0:
+            item = QListWidgetItem("No bookmarks yet. Click the bookmark icon on any message.")
+            item.setFlags(Qt.NoItemFlags)
+            item.setForeground(QColor("#484f58"))
+            self.list_widget.addItem(item)
 
     def _add_bookmark_item(self, conv_id, conv_title, msg):
         item = QListWidgetItem()

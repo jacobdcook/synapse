@@ -51,6 +51,7 @@ from .command_palette import CommandPalette
 from .screenshot import ScreenCaptureWidget
 from .settings_dialog import SettingsDialog
 from .compare_dialog import CompareDialog
+from .diff_view import DiffViewDialog
 from ..core.plugins import PluginManager
 from ..core.mcp import MCPClientManager
 from ..core.git import GitStatusWorker, is_git_repo
@@ -78,6 +79,8 @@ from .quick_chat import QuickChatWidget
 from .playground import PlaygroundPanel
 from .arena_dialog import ArenaDialog
 from .prompt_lab import PromptLab
+from .consensus_dialog import ConsensusDialog
+from ..core.code_extractor import CodeExtractor
 
 log = logging.getLogger(__name__)
 
@@ -475,6 +478,20 @@ class MainWindow(QMainWindow):
         if QSystemTrayIcon.isSystemTrayAvailable():
             self._tray_icon = QSystemTrayIcon(self)
             self._tray_icon.setToolTip(APP_NAME)
+            from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QFont
+            pm = QPixmap(64, 64)
+            pm.fill(QColor(0, 0, 0, 0))
+            painter = QPainter(pm)
+            painter.setRenderHint(QPainter.Antialiasing)
+            painter.setBrush(QColor("#58a6ff"))
+            painter.setPen(Qt.NoPen)
+            painter.drawEllipse(4, 4, 56, 56)
+            painter.setPen(QColor("#ffffff"))
+            painter.setFont(QFont("Arial", 28, QFont.Bold))
+            painter.drawText(pm.rect(), Qt.AlignCenter, "S")
+            painter.end()
+            self._tray_icon.setIcon(QIcon(pm))
+            self.setWindowIcon(QIcon(pm))
             tray_menu = QMenu()
             show_action = tray_menu.addAction("Show")
             show_action.triggered.connect(self.showNormal)
@@ -2398,6 +2415,8 @@ class MainWindow(QMainWindow):
             {"id": "session_replay", "label": "Session Replay", "shortcut": ""},
             {"id": "auto_tag", "label": "Auto-Tag Current Conversation", "shortcut": ""},
             {"id": "import_theme", "label": "Import Custom Theme (.qss)", "shortcut": ""},
+            {"id": "extract_code", "label": "Extract All Code Blocks to Files", "shortcut": ""},
+            {"id": "consensus", "label": "Multi-Model Consensus", "shortcut": ""},
             {"id": "streaming_instant", "label": "Streaming Speed: Instant (10ms)", "shortcut": ""},
             {"id": "streaming_fast", "label": "Streaming Speed: Fast (30ms)", "shortcut": ""},
             {"id": "streaming_normal", "label": "Streaming Speed: Normal (50ms)", "shortcut": ""},
@@ -2447,6 +2466,8 @@ class MainWindow(QMainWindow):
             "session_replay": self._start_replay,
             "auto_tag": self._auto_tag_conversation,
             "import_theme": self._import_custom_theme,
+            "extract_code": self._extract_code,
+            "consensus": self._open_consensus,
             "streaming_instant": lambda: self._set_streaming_speed(10),
             "streaming_fast": lambda: self._set_streaming_speed(30),
             "streaming_normal": lambda: self._set_streaming_speed(50),
@@ -3019,7 +3040,7 @@ class MainWindow(QMainWindow):
         avg_time = (total_duration // max(len(asst_msgs), 1))
         models_used = list(set(m.get("model", "?") for m in asst_msgs if m.get("model")))
         code_blocks = sum(m.get("content", "").count("```") // 2 for m in msgs)
-        created = self.current_conv.get("created", "?")
+        created = self.current_conv.get("created_at", "?")
 
         stats_text = (
             f"Messages: {len(msgs)} ({len(user_msgs)} user, {len(asst_msgs)} assistant)\n"
@@ -3161,3 +3182,29 @@ class MainWindow(QMainWindow):
         self._stream_timer.setInterval(max(10, speed_ms))
         self.settings_data["streaming_speed"] = speed_ms
         save_settings(self.settings_data)
+
+    # --- F21: Chat-to-Code Extractor ---
+    def _extract_code(self):
+        if not self.current_conv or not self.current_conv.get("messages"):
+            self.status_label.setText("No conversation to extract from")
+            return
+        from PyQt5.QtWidgets import QFileDialog, QMessageBox
+        target_dir = QFileDialog.getExistingDirectory(self, "Select Output Directory")
+        if not target_dir:
+            return
+        results = CodeExtractor.extract_to_directory(self.current_conv["messages"], target_dir)
+        if results:
+            summary = "\n".join(f"  {name} ({lang}, {lines} lines)" for name, lang, lines in results)
+            self.status_label.setText(f"Extracted {len(results)} code blocks to {target_dir}")
+            QMessageBox.information(self, "Code Extracted", f"Extracted {len(results)} files:\n{summary}")
+        else:
+            self.status_label.setText("No code blocks found in conversation")
+
+    # --- F16: Multi-Model Consensus Dialog ---
+    def _open_consensus(self):
+        models = [self.model_combo.itemText(i) for i in range(self.model_combo.count())]
+        if len(models) < 2:
+            self.status_label.setText("Need 2+ models for consensus")
+            return
+        dlg = ConsensusDialog(models, self.settings_data, self)
+        dlg.exec_()
