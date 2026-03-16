@@ -1,11 +1,13 @@
 # Synapse
 
-A polished, ChatGPT-style desktop chat client that connects to your local [Ollama](https://ollama.com) models. Run any LLM on your own hardware — no API keys, no cloud, no data leaving your machine.
+A polished, ChatGPT-style desktop chat client for local [Ollama](https://ollama.com) models with optional OpenAI and Anthropic cloud API support. Run LLMs on your own hardware or connect to cloud providers — your choice.
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue?logo=python&logoColor=white)
 ![PyQt5](https://img.shields.io/badge/PyQt5-Desktop_GUI-green?logo=qt&logoColor=white)
 ![Ollama](https://img.shields.io/badge/Ollama-Local_LLMs-orange)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
+
+![Chat](screenshots/02_chat.png)
 
 ---
 
@@ -18,28 +20,42 @@ Most local LLM interfaces are either terminal-only or bloated Electron apps. Syn
 | Conversation history | Per-session only | Persistent across sessions |
 | Multiple conversations | No | Tabbed chats + sidebar with search |
 | Model switching | Restart required | Dropdown + auto VRAM unload |
+| Cloud APIs | No | OpenAI, Anthropic, custom endpoints |
 | Markdown / code blocks | Raw text | Live-rendered with syntax highlighting |
 | Image support | No | Multimodal (paste, drag-drop, file picker) |
-| System prompts | Manual prefix | Presets + per-conversation editor |
+| Image generation | No | Stable Diffusion + ComfyUI |
+| System prompts | Manual prefix | Presets + template library |
 | Tool use | No | Built-in tools + MCP server support |
-| Model management | Terminal commands | Pull, delete, VRAM-aware recommendations |
+| Model management | Terminal commands | Pull, delete, HuggingFace browser |
 | Workspace | No | File browser, editor, terminal, git panel |
+| Analytics | No | Token usage, costs, model breakdown |
+| Scheduled tasks | No | Cron-style automated prompts |
 
 ## Features
 
 ### Core Chat
 - **Multi-Model Support** — Switch between any Ollama model from a dropdown. Synapse automatically unloads the previous model from VRAM before loading the new one.
+- **Cloud API Support** — Connect to OpenAI (GPT-4, o1, o3) and Anthropic (Claude) APIs alongside local Ollama models. Supports custom base URLs for Groq, Together, and other OpenAI-compatible providers.
 - **Streaming Markdown** — Responses render markdown live during streaming. Code blocks, tables, and formatting appear in real-time.
 - **Edit & Regenerate** — Edit any sent message or regenerate any response. "Retry with..." regenerates using a different model.
 - **Tabbed Conversations** — Open multiple chats in tabs, drag to reorder.
 - **Auto-Title** — Conversations are automatically titled by the model after the first exchange.
 - **Type While Streaming** — Queue your next message while the model is still generating.
 
+![Welcome](screenshots/01_welcome.png)
+
 ### Tool Use & MCP
-- **Built-in Tools** — File read/write, command execution, web search — the model can use tools to accomplish tasks.
+- **Built-in Tools** — File read/write, command execution, web search, image generation — the model can use tools to accomplish tasks.
 - **MCP (Model Context Protocol)** — Connect external tool servers (GitHub, filesystem, databases) via the MCP standard. Configure servers in Settings > MCP Servers.
 - **Tool Approval** — Review and approve/reject each tool call, or enable auto-execute for trusted workflows.
 - **Three-tier Dispatch** — Built-in tools > plugins > MCP servers, with automatic routing.
+
+### Prompt Template Library
+- **Built-in Templates** — Pre-built templates across Coding, Writing, Analysis, and Research categories.
+- **Custom Templates** — Create your own templates with system prompts and starter messages.
+- **One-Click Start** — Select a template to instantly start a new conversation with the right context.
+
+![Templates](screenshots/04_templates.png)
 
 ### Workspace
 - **File Browser** — Browse and open project files from the sidebar.
@@ -57,6 +73,33 @@ Most local LLM interfaces are either terminal-only or bloated Electron apps. Syn
 - **Pull Models** — Download new models from within the app with a live progress bar.
 - **Delete Models** — Remove models you don't use.
 - **VRAM-Aware Recommendations** — Detects your GPU VRAM and shows models that will fit, color-coded by availability.
+- **HuggingFace Browser** — Search and download GGUF models directly from HuggingFace without leaving the app.
+
+![Models](screenshots/03_models.png)
+
+### Image Generation
+- **Stable Diffusion** — Generate images via local A1111/Forge API with prompt, negative prompt, steps, CFG, and size controls.
+- **ComfyUI** — Full ComfyUI workflow support with automatic polling for results.
+- **Tool Integration** — AI models can generate images via the `generate_image` tool during conversations.
+
+![Image Generation](screenshots/06_image_gen.png)
+
+### Analytics Dashboard
+- **Usage Tracking** — Monitor token usage, message counts, and response times across all models.
+- **Model Breakdown** — See which models you use most with per-model token statistics.
+- **Cost Estimates** — Estimated costs for cloud API models (OpenAI, Anthropic).
+- **Auto-Pruning** — Analytics data older than 90 days is automatically cleaned up.
+
+![Analytics](screenshots/05_analytics.png)
+
+### Scheduled Agents
+- **Cron-style Tasks** — Schedule prompts to run automatically on intervals (every N minutes/hours, or daily at a specific time).
+- **Model Selection** — Choose which model runs each scheduled task.
+- **Task History** — View results of completed scheduled tasks with tray notifications.
+
+### Branch Tree Visualization
+- **Conversation Trees** — Visualize conversation branch structure as an interactive tree diagram.
+- **Node Navigation** — Click any node in the tree to jump to that point in the conversation.
 
 ### Organization
 - **Pin & Bookmark** — Pin conversations to the top, bookmark individual messages.
@@ -65,13 +108,17 @@ Most local LLM interfaces are either terminal-only or bloated Electron apps. Syn
 - **Import/Export** — Import JSON conversations. Export as Markdown or self-contained HTML.
 - **Command Palette** — Ctrl+Shift+P to quickly access any action.
 
-### Power User
-- **Slash Commands** — `/clear`, `/model`, `/system`, `/export`, `/stats`, `/pull`, `/mcp`, `/help` and more.
+### Settings & Customization
+- **Keyboard Shortcut Customization** — Rebind any keyboard shortcut from Settings > Shortcuts.
+- **First-Run Onboarding** — Guided setup wizard for Ollama connection, model selection, and API keys.
 - **Generation Parameters** — Temperature, Top P, context length, repeat penalty.
 - **System Prompt Presets** — Built-in presets (Coder, Creative Writer, Concise, Analyst) plus custom presets.
 - **Remote Ollama** — Connect to Ollama on another machine by configuring the server URL.
 - **Notification Sound** — Optional notification when a response finishes and the window isn't focused.
 - **Zoom Controls** — Ctrl+=/- to zoom the chat view.
+
+![Settings](screenshots/07_settings.png)
+![Onboarding](screenshots/08_onboarding.png)
 
 ## Primary Models
 
@@ -127,42 +174,57 @@ EOF
 
 ```
 synapse/
-├── __main__.py          # Entry point
+├── __main__.py              # Entry point
 ├── core/
-│   ├── api.py           # Ollama API client (streaming, tool support)
-│   ├── agent.py         # Tool registry & execution
-│   ├── mcp.py           # MCP client manager (JSON-RPC over stdio)
-│   ├── renderer.py      # HTML/CSS chat renderer
-│   ├── store.py         # Conversation persistence
-│   ├── indexer.py       # Workspace file indexer (RAG)
-│   ├── git.py           # Git operations
-│   └── plugins.py       # Plugin system
+│   ├── api.py               # Multi-backend API (Ollama, OpenAI, Anthropic)
+│   ├── agent.py             # Tool registry & execution
+│   ├── analytics.py         # Usage tracking & statistics
+│   ├── image_gen.py         # Stable Diffusion & ComfyUI integration
+│   ├── memory.py            # Long-term memory for AI agents
+│   ├── mcp.py               # MCP client manager (JSON-RPC over stdio)
+│   ├── renderer.py          # HTML/CSS chat renderer
+│   ├── scheduler.py         # Cron-style task scheduler
+│   ├── store.py             # Conversation persistence
+│   ├── indexer.py           # Workspace file indexer (RAG)
+│   ├── git.py               # Git operations
+│   └── plugins.py           # Plugin system
 ├── ui/
-│   ├── main.py          # Main window & orchestration
-│   ├── input.py         # Chat input with completers
-│   ├── sidebar.py       # Conversation list
-│   ├── workspace.py     # File browser panel
-│   ├── editor.py        # Built-in code editor
-│   ├── terminal.py      # Integrated terminal
-│   ├── git_panel.py     # Git status/commit UI
-│   ├── settings_dialog.py  # Settings (gen params, MCP, themes)
-│   ├── command_palette.py  # Ctrl+Shift+P command palette
+│   ├── main.py              # Main window & orchestration
+│   ├── input.py             # Chat input with completers
+│   ├── sidebar.py           # Conversation list
+│   ├── analytics_sidebar.py # Usage analytics dashboard
+│   ├── template_library.py  # Prompt template browser
+│   ├── onboarding.py        # First-run setup wizard
+│   ├── ImageGenSidebar.py   # Image generation panel
+│   ├── ScheduleSidebar.py   # Scheduled agents panel
+│   ├── BranchTreeSidebar.py # Conversation tree visualization
+│   ├── model_manager.py     # Model management + HuggingFace browser
+│   ├── workspace.py         # File browser panel
+│   ├── editor.py            # Built-in code editor
+│   ├── terminal.py          # Integrated terminal
+│   ├── git_panel.py         # Git status/commit UI
+│   ├── settings_dialog.py   # Settings (providers, shortcuts, MCP, themes)
+│   ├── command_palette.py   # Ctrl+Shift+P command palette
 │   └── ...
 ├── utils/
-│   ├── constants.py     # App constants
-│   └── themes.py        # Theme definitions
-└── resources/           # Icons, sounds
+│   ├── constants.py         # App constants, templates, pricing
+│   └── themes.py            # Theme definitions
+└── resources/               # Icons, sounds
 
 ~/.local/share/synapse/
-├── conversations/       # JSON files, one per conversation
-└── settings.json        # All settings (model, MCP servers, gen params, etc.)
+├── conversations/           # JSON files, one per conversation
+├── analytics_v1.json        # Usage analytics data
+├── generated/               # AI-generated images
+└── settings.json            # All settings
 ```
 
 **Tech stack:**
 - **PyQt5** — Native desktop widgets + QWebEngineView for chat rendering
 - **QWebEngineView** — Chromium-based view for live markdown/HTML rendering
 - **Ollama REST API** — Streaming chat, model management, tool calling
+- **OpenAI / Anthropic APIs** — Cloud model support (GPT-4, Claude, etc.)
 - **MCP** — Model Context Protocol for external tool servers
+- **Stable Diffusion / ComfyUI** — Local image generation
 - **Pygments** — Syntax highlighting (Monokai theme)
 
 ## Keyboard Shortcuts
