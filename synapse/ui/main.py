@@ -961,8 +961,20 @@ class MainWindow(QMainWindow):
                 refresh_btn.clicked.connect(_refresh)
                 close_btn = QPushButton("Close")
                 close_btn.clicked.connect(dlg.close)
+                clear_btn = QPushButton("Clear Logs")
+                clear_btn.setStyleSheet("color: #f85149;")
+                def _clear_logs():
+                    if QMessageBox.question(dlg, "Clear Logs", "Delete all log history?", QMessageBox.Yes|QMessageBox.No) == QMessageBox.Yes:
+                        try:
+                            log_path.write_text("")
+                            text.setPlainText("")
+                            log.info("Logs cleared by user")
+                        except Exception as ex:
+                            log.error(f"Failed to clear logs: {ex}")
+                clear_btn.clicked.connect(_clear_logs)
                 btn_row.addWidget(open_ext_btn)
                 btn_row.addWidget(refresh_btn)
+                btn_row.addWidget(clear_btn)
                 btn_row.addStretch()
                 btn_row.addWidget(close_btn)
                 layout.addLayout(btn_row)

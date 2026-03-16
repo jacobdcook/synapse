@@ -1,12 +1,13 @@
 import sys
 import logging
+import logging.handlers
 from pathlib import Path
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication, QMessageBox
 from PyQt5 import QtWebEngineWidgets  # Must be imported before QApplication
 from .utils.constants import APP_NAME, CONFIG_DIR
 
-# Configure logging — use proper data directory
+# Configure logging — use proper data directory with rotation
 LOG_DIR = CONFIG_DIR
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 log_path = str(LOG_DIR / "synapse.log")
@@ -16,7 +17,9 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler(log_path)
+        logging.handlers.RotatingFileHandler(
+            log_path, maxBytes=2*1024*1024, backupCount=3  # 2MB per file, keep 3 backups
+        )
     ]
 )
 log = logging.getLogger(__name__)

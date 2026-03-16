@@ -39,10 +39,16 @@ class ImageGenWorker(QThread):
             self.finished.emit(result)
         except Exception as e:
             log.error(f"Image generation error: {e}")
-            self.finished.emit({"success": False, "error": str(e)})
+            err = str(e)
+            if "Connection refused" in err:
+                provider_name = {"sd": "Stable Diffusion (A1111/Forge)", "comfy": "ComfyUI", "openai": "OpenAI"}.get(self.provider, self.provider)
+                err = f"{provider_name} server not running.\n\nThis backend requires a local server. Install and start it first."
+            self.finished.emit({"success": False, "error": err})
 
     def _run_sd(self):
-        """Stable Diffusion A1111/Forge API implementation."""
+        """Stable Diffusion A1111/Forge API implementation.
+        Requires AUTOMATIC1111 or Forge running locally.
+        """
         url = self.params.get("url", DEFAULT_SD_URL)
         endpoint = f"{url.rstrip('/')}/sdapi/v1/txt2img"
         
