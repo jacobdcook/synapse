@@ -139,3 +139,20 @@ class QuickChatWidget(QWidget):
         self.input_box.setFocus()
         self.raise_()
         self.activateWindow()
+
+    def apply_theme(self, theme):
+        bg = theme.get("bg", "#1e1f23")
+        input_bg = theme.get("input_bg", "#0d1117")
+        fg = theme.get("fg", "#e6edf3")
+        border = theme.get("border", "#30363d")
+        accent = theme.get("accent", "#238636")
+        self.setStyleSheet(f"""
+            QWidget {{ background: {bg}; border: 1px solid {border}; border-radius: 10px; }}
+            QTextEdit {{ background: {input_bg}; color: {fg}; border: 1px solid {border}; border-radius: 6px; padding: 6px; }}
+            QPushButton {{ background: {accent}; color: white; border: none; padding: 6px 16px; border-radius: 6px; font-weight: bold; }}
+            QPushButton:hover {{ background: {accent}; }}
+            QPushButton#close_btn {{ background: transparent; color: {fg}; font-size: 16px; padding: 2px 8px; }}
+            QPushButton#close_btn:hover {{ color: #ff6b6b; }}
+            QComboBox {{ background: {input_bg}; color: {fg}; border: 1px solid {border}; padding: 4px; border-radius: 4px; }}
+            QLabel {{ color: {fg}; border: none; }}
+        """)

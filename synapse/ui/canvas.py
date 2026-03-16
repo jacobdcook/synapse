@@ -108,3 +108,10 @@ class CanvasWidget(QWidget):
     def clear(self):
         self._last_content = ""
         self.view.setHtml("<html><body style='background:#1e1e1e; color:#888; display:flex; justify-content:center; align-items:center; height:100vh;'>No preview active</body></html>")
+
+    def apply_theme(self, theme):
+        bg = theme.get("sidebar_bg", "#2d2d2d")
+        border = theme.get("border", "#3e3e3e")
+        fg = theme.get("fg", "#cccccc")
+        self.header.setStyleSheet(f"background-color: {bg}; border-bottom: 1px solid {border};")
+        self.title_label.setStyleSheet(f"font-weight: bold; color: {fg}; font-size: 12px;")

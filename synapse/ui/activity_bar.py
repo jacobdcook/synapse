@@ -64,3 +64,23 @@ class ActivityBar(QWidget):
         for i, btn in enumerate(self.buttons):
             btn.setChecked(i == index)
         self.activity_changed.emit(index)
+
+    def apply_theme(self, theme):
+        bg = theme.get("sidebar_bg", "#333333")
+        border = theme.get("border", "#1e1e1e")
+        accent = theme.get("accent", "#ffffff")
+        fg = theme.get("fg", "#858585")
+        self.setStyleSheet(f"background-color: {bg}; border-right: 1px solid {border};")
+        btn_style = (
+            f"QPushButton {{ background: transparent; border: none; font-size: 20px; color: {fg}; }}"
+            f"QPushButton:hover {{ color: {accent}; }}"
+            f"QPushButton:checked {{ color: {accent}; border-left: 2px solid {accent}; }}"
+        )
+        for btn in self.buttons:
+            btn.setStyleSheet(btn_style)
+        settings_btn = self.layout().itemAt(self.layout().count() - 1).widget()
+        if settings_btn:
+            settings_btn.setStyleSheet(
+                f"QPushButton {{ background: transparent; border: none; font-size: 20px; color: {fg}; }}"
+                f"QPushButton:hover {{ color: {accent}; }}"
+            )

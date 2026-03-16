@@ -5,7 +5,7 @@ from .themes import THEMES
 
 # Application Constants
 APP_NAME = "Synapse"
-APP_VERSION = "2.0.0"
+APP_VERSION = "3.0.0"
 ORG_NAME = "JacobCook"
 
 # Paths

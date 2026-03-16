@@ -176,3 +176,20 @@ class ConsensusDialog(QDialog):
         self.synth_view.setPlainText(text)
         self.synth_btn.setEnabled(True)
         self.synth_btn.setText("Synthesize")
+
+    def apply_theme(self, theme):
+        bg = theme.get("bg", "#1a1b1e")
+        input_bg = theme.get("input_bg", "#0d1117")
+        fg = theme.get("fg", "#e6edf3")
+        border = theme.get("border", "#30363d")
+        accent = theme.get("accent", "#238636")
+        self.setStyleSheet(f"""
+            QDialog {{ background: {bg}; }}
+            QTextEdit {{ background: {input_bg}; color: {fg}; border: 1px solid {border}; border-radius: 6px; padding: 6px; }}
+            QLabel {{ color: {fg}; }}
+            QPushButton {{ background: {accent}; color: white; border: none; padding: 8px 16px; border-radius: 6px; font-weight: bold; }}
+            QPushButton:hover {{ background: {accent}; }}
+            QPushButton:disabled {{ background: {border}; color: #484f58; }}
+            QCheckBox {{ color: {fg}; spacing: 6px; }}
+            QFrame {{ background: {input_bg}; border: 1px solid {border}; border-radius: 8px; }}
+        """)

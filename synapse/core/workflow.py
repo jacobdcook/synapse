@@ -99,40 +99,29 @@ class WorkflowExecutor(QThread):
         return resolved
 
     def _run_node_sync(self, model, prompt):
-        # We need to bridge to the AI Worker and wait for result
-        # This is tricky because Workers are usually QThreads.
-        # We'll use a local event loop or a simple wait.
         from .api import WorkerFactory
-        
-        # Mocking the sync wait for now - in reality, we'd need to connect signals
-        # and use a QEventLoop to block without freezing.
-        # But since we're IN a QThread already (WorkflowExecutor), we can wait.
-        
-        result_container = {"text": "", "error": None, "done": False}
-        
+        from PyQt5.QtCore import QEventLoop
+
+        loop = QEventLoop()
+        result_container = {"text": "", "error": None}
+
         def on_done(text, stats):
             result_container["text"] = text
-            result_container["done"] = True
-            
+            loop.quit()
+
         def on_error(err):
             result_container["error"] = err
-            result_container["done"] = True
+            loop.quit()
 
-        # Note: messages list for single prompt
         messages = [{"role": "user", "content": prompt}]
-        
-        # We must create worker in this thread to wait for it or ensure signal delivery
         worker = WorkerFactory(model, messages)
         worker.response_finished.connect(on_done)
         worker.error_occurred.connect(on_error)
         worker.start()
-        
-        while not result_container["done"]:
-            self.msleep(100) # Wait in 100ms chunks
-            
+        loop.exec_()
+
         if result_container["error"]:
             raise Exception(result_container["error"])
-            
         return result_container["text"]
 
 class WorkflowManager:

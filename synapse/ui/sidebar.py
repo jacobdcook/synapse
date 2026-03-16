@@ -140,6 +140,33 @@ class SidebarWidget(QWidget):
         self._all_convos = []
         self._folder_items = {}
 
+    def apply_theme(self, theme):
+        bg = theme.get("sidebar_bg", "#1e1e1e")
+        fg = theme.get("fg", "#ccc")
+        border = theme.get("border", "#1e1e1e")
+        accent = theme.get("accent", "#58a6ff")
+        hover = theme.get("input_bg", "#2a2d2e")
+        self.tree.setStyleSheet(f"""
+            QTreeWidget {{
+                background: transparent;
+                border: none;
+                outline: none;
+            }}
+            QTreeWidget::item {{
+                padding: 6px 4px;
+                border-radius: 4px;
+                margin: 1px 6px;
+                color: {fg};
+            }}
+            QTreeWidget::item:hover {{
+                background: {hover};
+            }}
+            QTreeWidget::item:selected {{
+                background: {border};
+                color: {accent};
+            }}
+        """)
+
     def refresh(self, select_id=None):
         self._all_convos = self.store.list_conversations()
         self._update_tags()
@@ -308,7 +335,7 @@ class SidebarWidget(QWidget):
             elif action == rename_act:
                 self._on_double_click(item, 0)
             elif action == duplicate_act:
-                self.duplicate_chat(conv_id)
+                self._duplicate_chat(conv_id)
             elif action.parent() == move_menu:
                 self.store.move_to_folder(conv_id, action.data())
                 self.refresh(select_id=conv_id)

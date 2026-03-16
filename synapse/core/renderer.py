@@ -11,6 +11,16 @@ from ..utils.constants import (
 
 
 class ChatRenderer:
+    @staticmethod
+    def _safe_truncate(text, limit=2000):
+        if len(text) <= limit:
+            return text
+        t = text[:limit]
+        amp = t.rfind('&')
+        if amp != -1 and ';' not in t[amp:]:
+            t = t[:amp]
+        return t + "..."
+
     def __init__(self):
         self.formatter = HtmlFormatter(style="monokai", noclasses=True, nowrap=False)
         self.pygments_css = HtmlFormatter(style="monokai").get_style_defs('.highlight')
@@ -62,6 +72,8 @@ class ChatRenderer:
                 inner = re.search(r'<code[^>]*>(.*?)</code>', code_content, re.DOTALL)
                 if inner:
                     mermaid_src = html_module.unescape(inner.group(1))
+                    mermaid_src = re.sub(r'<script[^>]*>.*?</script>', '', mermaid_src, flags=re.DOTALL | re.IGNORECASE)
+                    mermaid_src = re.sub(r'\bon\w+\s*=', '', mermaid_src)
                     btns = f'<button class="cb-btn cb-preview" onclick="window.location.href=\'action://previewartifact/{ci}\'">&#128065; Open in Canvas</button>'
                     return (
                         f'<div class="code-block">'
@@ -140,8 +152,8 @@ class ChatRenderer:
                         icon_char = "&#10007;" if is_err else "&#10003;"
                         display_name = tc_name.replace("mcp__github__", "github/").replace("mcp__", "")
                         args_summary = self._tool_args_summary(tc_args)
-                        result_escaped = html_module.escape(result_text[:2000])
-                        args_escaped = html_module.escape(json.dumps(tc_args, indent=2)[:1000]) if tc_args else ""
+                        result_escaped = html_module.escape(self._safe_truncate(result_text))
+                        args_escaped = html_module.escape(self._safe_truncate(json.dumps(tc_args, indent=2), 1000)) if tc_args else ""
                         tid = f"t{tool_idx}"
                         tool_idx += 1
                         args_section = f'<div class="tool-label">Input</div><div class="tool-output">{args_escaped}</div>' if args_escaped else ""

@@ -81,6 +81,7 @@ from .arena_dialog import ArenaDialog
 from .prompt_lab import PromptLab
 from .consensus_dialog import ConsensusDialog
 from ..core.code_extractor import CodeExtractor
+from .shortcuts_dialog import ShortcutsDialog
 
 log = logging.getLogger(__name__)
 
@@ -143,7 +144,10 @@ class MainWindow(QMainWindow):
         self._shortcut_objects = []
         self._consensus_active = False
         self._consensus_responses = {}
+        self._rag_enabled = False
+        self._active_stream_conv = None
         self._zen_mode = False
+        self._current_theme = THEMES.get(self.settings_data.get("theme", "One Dark"), THEMES["One Dark"])
         
         unload_all_models()
         self._setup_ui()
@@ -574,7 +578,10 @@ class MainWindow(QMainWindow):
         self.model_combo.addItems(models)
         self.model_combo.setCurrentIndex(0)
         self.model_combo.blockSignals(False)
-        self.split_view.set_available_models(models)
+        for i in range(self.chat_tabs.count()):
+            sv = self.chat_tabs.widget(i).findChild(SplitViewWidget)
+            if sv:
+                sv.set_available_models(models)
 
         if self.current_conv:
             self.current_conv["model"] = self.model_combo.currentText() or DEFAULT_MODEL
@@ -879,7 +886,16 @@ class MainWindow(QMainWindow):
         self.settings_data["theme"] = theme_name
         save_settings(self.settings_data)
         theme = THEMES.get(theme_name, THEMES["One Dark"])
+        self._current_theme = theme
         self.title_label.setStyleSheet(f"font-weight: bold; font-size: 16px; color: {theme['accent']}; letter-spacing: 1px;")
+        for widget in (
+            self.activity_bar, self.sidebar, self.input_widget,
+            self.bookmarks_panel, self.workflow_sidebar,
+        ):
+            if hasattr(widget, 'apply_theme'):
+                widget.apply_theme(theme)
+        if hasattr(self, 'canvas') and hasattr(self.canvas, 'apply_theme'):
+            self.canvas.apply_theme(theme)
 
     def _setup_logo_animation(self):
         """Creates a pulsating glow effect for the Synapse Logo."""
@@ -2422,6 +2438,7 @@ class MainWindow(QMainWindow):
             {"id": "streaming_normal", "label": "Streaming Speed: Normal (50ms)", "shortcut": ""},
             {"id": "streaming_slow", "label": "Streaming Speed: Slow (100ms)", "shortcut": ""},
             {"id": "streaming_typewriter", "label": "Streaming Speed: Typewriter (200ms)", "shortcut": ""},
+            {"id": "show_shortcuts", "label": "Show Keyboard Shortcuts", "shortcut": ""},
         ]
         for tname in THEMES:
             commands.append({"id": f"theme_{tname}", "label": f"Theme: {tname}", "shortcut": ""})
@@ -2473,6 +2490,7 @@ class MainWindow(QMainWindow):
             "streaming_normal": lambda: self._set_streaming_speed(50),
             "streaming_slow": lambda: self._set_streaming_speed(100),
             "streaming_typewriter": lambda: self._set_streaming_speed(200),
+            "show_shortcuts": self._show_shortcuts,
         }
         for tname in THEMES:
             dispatch[f"theme_{tname}"] = lambda n=tname: self._on_theme_changed(n)
@@ -3005,12 +3023,16 @@ class MainWindow(QMainWindow):
             models = [self.model_combo.itemText(i) for i in range(self.model_combo.count())]
             self._quick_chat = QuickChatWidget(models)
             self._quick_chat.closed.connect(lambda: setattr(self, '_quick_chat', None))
+            if hasattr(self, '_current_theme'):
+                self._quick_chat.apply_theme(self._current_theme)
         self._quick_chat.showAtCursor()
 
     # --- F13: Playground ---
     def _open_playground(self):
         models = [self.model_combo.itemText(i) for i in range(self.model_combo.count())]
         dlg = PlaygroundPanel(models, self.settings_data, self)
+        if hasattr(self, '_current_theme'):
+            dlg.apply_theme(self._current_theme)
         dlg.exec_()
 
     # --- F30: Arena ---
@@ -3020,12 +3042,16 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Arena", "Need at least 2 models for an arena battle.")
             return
         dlg = ArenaDialog(models, self.settings_data, self)
+        if hasattr(self, '_current_theme'):
+            dlg.apply_theme(self._current_theme)
         dlg.exec_()
 
     # --- F34: Prompt Lab ---
     def _open_prompt_lab(self):
         models = [self.model_combo.itemText(i) for i in range(self.model_combo.count())]
         dlg = PromptLab(models, self.settings_data, self)
+        if hasattr(self, '_current_theme'):
+            dlg.apply_theme(self._current_theme)
         dlg.exec_()
 
     # --- F28: Conversation Statistics ---
@@ -3200,6 +3226,13 @@ class MainWindow(QMainWindow):
         else:
             self.status_label.setText("No code blocks found in conversation")
 
+    def _show_shortcuts(self):
+        shortcuts = self.settings_data.get("shortcuts", DEFAULT_SHORTCUTS)
+        dlg = ShortcutsDialog(shortcuts, self)
+        if hasattr(self, '_current_theme'):
+            dlg.apply_theme(self._current_theme)
+        dlg.exec_()
+
     # --- F16: Multi-Model Consensus Dialog ---
     def _open_consensus(self):
         models = [self.model_combo.itemText(i) for i in range(self.model_combo.count())]
@@ -3207,4 +3240,6 @@ class MainWindow(QMainWindow):
             self.status_label.setText("Need 2+ models for consensus")
             return
         dlg = ConsensusDialog(models, self.settings_data, self)
+        if hasattr(self, '_current_theme'):
+            dlg.apply_theme(self._current_theme)
         dlg.exec_()

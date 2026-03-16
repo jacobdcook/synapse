@@ -560,6 +560,8 @@ class ModelManagerPanel(QWidget):
     def _start_pull(self, name):
         if self._pull_worker and self._pull_worker.isRunning(): return
         self.pull_progress.setVisible(True)
+        self.pull_progress.setMaximum(100)
+        self.pull_progress.setValue(0)
         self.pull_status.setText(f"Preparing to pull {name}...")
         self._pull_worker = ModelPullWorker(name)
         self._pull_worker.progress.connect(lambda s, p: (self.pull_progress.setValue(p), self.pull_status.setText(s)))

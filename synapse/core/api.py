@@ -361,14 +361,9 @@ class OpenRouterWorker(OpenAIWorker):
                 api_messages.append(entry)
 
             payload = {
-                "model": self.model, 
-                "messages": api_messages, 
+                "model": self.model,
+                "messages": api_messages,
                 "stream": True,
-                # OpenRouter specific: show up in their rankings
-                "headers": {
-                    "HTTP-Referer": "https://github.com/jacobdcook/synapse",
-                    "X-Title": "Synapse Desktop"
-                }
             }
             if self.tools: payload["tools"] = self.tools
             if "temperature" in self.gen_params: payload["temperature"] = self.gen_params["temperature"]

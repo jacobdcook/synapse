@@ -1,7 +1,7 @@
 import difflib
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QTextEdit, QLabel,
-    QFrame, QSplitter
+    QFrame, QSplitter, QWidget
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor, QTextCharFormat, QFont
@@ -96,3 +96,10 @@ class DiffViewDialog(QDialog):
     def _accept_and_apply(self):
         self.accepted_change = True
         self.accept()
+
+    def apply_theme(self, theme):
+        input_bg = theme.get("input_bg", "#0d1117")
+        fg = theme.get("fg", "#c9d1d9")
+        border = theme.get("border", "#30363d")
+        self.old_editor.setStyleSheet(f"background-color: {input_bg}; color: {fg}; border: 1px solid {border};")
+        self.new_editor.setStyleSheet(f"background-color: {input_bg}; color: {fg}; border: 1px solid {border};")

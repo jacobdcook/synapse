@@ -142,3 +142,19 @@ class PlaygroundPanel(QDialog):
         self.response_view.clear()
         self.stats_label.clear()
         self._response_text = ""
+
+    def apply_theme(self, theme):
+        bg = theme.get("bg", "#1a1b1e")
+        input_bg = theme.get("input_bg", "#0d1117")
+        fg = theme.get("fg", "#e6edf3")
+        border = theme.get("border", "#30363d")
+        accent = theme.get("accent", "#238636")
+        self.setStyleSheet(f"""
+            QDialog {{ background: {bg}; }}
+            QTextEdit {{ background: {input_bg}; color: {fg}; border: 1px solid {border}; border-radius: 6px; padding: 8px; }}
+            QLabel {{ color: {fg}; }}
+            QPushButton {{ background: {accent}; color: white; border: none; padding: 8px 20px; border-radius: 6px; font-weight: bold; }}
+            QPushButton:hover {{ background: {accent}; }}
+            QPushButton:disabled {{ background: {border}; color: #484f58; }}
+            QComboBox {{ background: {input_bg}; color: {fg}; border: 1px solid {border}; padding: 4px 8px; border-radius: 4px; }}
+        """)

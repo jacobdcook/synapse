@@ -814,3 +814,16 @@ class InputWidget(QWidget):
 
     def update_mic_level(self, level):
         self.visualizer.set_level(level)
+
+    def apply_theme(self, theme):
+        bg = theme.get("input_bg", "#2d2d2d")
+        border = theme.get("border", "#3e3e3e")
+        accent = theme.get("accent", "#58a6ff")
+        fg = theme.get("fg", "#888")
+        btn_style = (
+            f"QPushButton {{ background: {bg}; color: {fg}; border: none; border-radius: 6px; font-size: 18px; }}"
+            f"QPushButton:checked {{ background: {accent}; color: white; }}"
+            f"QPushButton:hover {{ background: {border}; }}"
+        )
+        for btn in (self.web_search_btn, self.mic_btn, self.voice_btn, self.sync_btn):
+            btn.setStyleSheet(btn_style)

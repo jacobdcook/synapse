@@ -136,5 +136,12 @@ class ImageGenSidebar(QWidget):
         self.history.append(filepath)
 
     def refresh(self):
-        # Could reload local files from GEN_DIR here
-        pass
+        from ..core.image_gen import GEN_DIR
+        while self.gallery_layout.count():
+            item = self.gallery_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self.history.clear()
+        for ext in ("*.png", "*.jpg", "*.jpeg", "*.webp"):
+            for filepath in sorted(GEN_DIR.glob(ext), key=lambda p: p.stat().st_mtime, reverse=True):
+                self._add_image(str(filepath))

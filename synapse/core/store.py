@@ -1,6 +1,8 @@
 import json
+import os
 import uuid
 import logging
+import tempfile
 from datetime import datetime, timezone
 from ..utils.constants import CONV_DIR, DEFAULT_MODEL, DEFAULT_SYSTEM_PROMPT
 
@@ -59,21 +61,22 @@ class ConversationStore:
         if "messages" in conversation:
             if "history" not in conversation:
                 conversation["history"] = []
-                
+
+            existing_ids = {m.get("id") for m in conversation["history"]}
             last_id = None
             for msg in conversation["messages"]:
                 if "id" not in msg:
                     msg["id"] = str(uuid.uuid4())
                 if "parent_id" not in msg:
                     msg["parent_id"] = last_id
-                
+
                 content = str(msg.get("content", ""))
                 total_tokens += len(content.split()) * 1.5 + 20
-                
-                # Add to history if not present
-                if not any(m.get("id") == msg["id"] for m in conversation["history"]):
+
+                if msg["id"] not in existing_ids:
                     conversation["history"].append(msg)
-                    
+                    existing_ids.add(msg["id"])
+
                 last_id = msg["id"]
         
         conversation["stats"] = {
@@ -83,8 +86,17 @@ class ConversationStore:
         }
         
         path = CONV_DIR / f"{conversation['id']}.json"
-        with open(path, "w") as f:
-            json.dump(conversation, f, indent=2)
+        fd, tmp_path = tempfile.mkstemp(dir=str(CONV_DIR), suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(conversation, f, indent=2)
+            os.replace(tmp_path, str(path))
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
     def delete(self, conv_id):
         path = CONV_DIR / f"{conv_id}.json"

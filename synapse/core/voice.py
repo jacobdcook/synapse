@@ -39,6 +39,7 @@ class VoiceManager(QObject):
         self._stream = None
         self._playback_process = None
         self._silence_start = None
+        self._tts_generation = 0
         self.tts_voice = "en-US-AndrewNeural"
 
     @property
@@ -184,6 +185,7 @@ class VoiceManager(QObject):
         if not text:
             return
         self.stop_playback()
+        self._tts_generation += 1
         threading.Thread(target=self._run_tts, args=(text, voice), daemon=True).start()
 
     def _run_tts(self, text, voice):
@@ -193,18 +195,21 @@ class VoiceManager(QObject):
             log.error(f"TTS Thread Error: {e}")
 
     async def _generate_and_play(self, text, voice):
+        output_path = None
+        gen = self._tts_generation
         try:
             import edge_tts
             self.playback_status.emit(True)
-            
+
             communicate = edge_tts.Communicate(text, voice)
             with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
                 output_path = f.name
-                
+
             await communicate.save(output_path)
-            
-            # Play using available system player
-            # On Linux: mpv, ffplay, paplay, etc.
+
+            if self._tts_generation != gen:
+                return
+
             played = False
             for player_args in [
                 ["mpv", "--no-video", "--autoexit", output_path],
@@ -225,14 +230,15 @@ class VoiceManager(QObject):
             if not played:
                 log.error("No suitable audio player found (mpv, ffplay, cvlc).")
                 self.error_occurred.emit("No audio player found. Please install mpv or ffmpeg.")
-            
-            # Cleanup
-            if os.path.exists(output_path):
-                os.remove(output_path)
-                
+
         except Exception as e:
             log.error(f"TTS Error: {e}")
             self.error_occurred.emit(f"TTS Error: {e}")
         finally:
             self.playback_status.emit(False)
             self._playback_process = None
+            if output_path:
+                try:
+                    os.remove(output_path)
+                except OSError:
+                    pass

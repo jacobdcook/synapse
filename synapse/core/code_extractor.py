@@ -26,7 +26,7 @@ class CodeExtractor:
             if msg.get("role") != "assistant":
                 continue
             content = msg.get("content", "")
-            for m in re.finditer(r'```(\w*)\n(.*?)\n```', content, re.DOTALL):
+            for m in re.finditer(r'```([\w+#.-]*)\n?(.*?)\n?```', content, re.DOTALL):
                 lang = m.group(1).lower() or "text"
                 code = m.group(2)
                 blocks.append((lang, code, i))

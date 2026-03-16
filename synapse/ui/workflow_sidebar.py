@@ -246,5 +246,15 @@ class WorkflowSidebar(QWidget):
 
     def _on_workflow_done(self, main_win, output):
         main_win.status_label.setText("Workflow finished")
-        # Optional: Inject final output into chat
         main_win._send_message(f"Workflow completed. Final output:\n\n{output}", bypass_rag=True)
+
+    def apply_theme(self, theme):
+        bg = theme.get("sidebar_bg", "#1e1e1e")
+        fg = theme.get("fg", "#ccc")
+        border = theme.get("border", "#30363d")
+        accent = theme.get("accent", "#58a6ff")
+        self.wf_list.setStyleSheet(f"""
+            QListWidget {{ background: transparent; border: none; }}
+            QListWidget::item {{ padding: 6px; color: {fg}; border-radius: 4px; }}
+            QListWidget::item:selected {{ background: {border}; color: {accent}; }}
+        """)

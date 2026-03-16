@@ -94,3 +94,20 @@ class BookmarksPanel(QWidget):
     def _on_item_clicked(self, item):
         conv_id, msg_id = item.data(Qt.UserRole)
         self.bookmark_selected.emit(conv_id, msg_id)
+
+    def apply_theme(self, theme):
+        accent = theme.get("accent", "#58a6ff")
+        bg = theme.get("sidebar_bg", "#21262d")
+        fg = theme.get("fg", "#c9d1d9")
+        border = theme.get("border", "#30363d")
+        self.list_widget.setStyleSheet(f"""
+            QListWidget {{ background: transparent; border: none; }}
+            QListWidget::item {{
+                background: {bg};
+                border-radius: 6px;
+                margin-bottom: 8px;
+                padding: 10px;
+                color: {fg};
+            }}
+            QListWidget::item:selected {{ background: {border}; border: 1px solid {accent}; }}
+        """)
