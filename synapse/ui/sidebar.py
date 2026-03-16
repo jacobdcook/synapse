@@ -406,7 +406,15 @@ class SidebarWidget(QWidget):
                     f.write(f"*Date: {created[:10] if created else 'Unknown'}*\n\n---\n\n")
                     for msg in conv.get("messages", []):
                         role = msg.get("role", "unknown").upper()
-                        f.write(f"### {role}\n{msg.get('content', '')}\n\n---\n\n")
+                        content = msg.get('content', '')
+                        f.write(f"### {role}\n{content}\n")
+                        images = msg.get("images", [])
+                        if images:
+                            f.write(f"\n*[{len(images)} image(s) attached]*\n")
+                        files = msg.get("attached_files", [])
+                        for af in files:
+                            f.write(f"\n**Attached: {af.get('name', 'file')}**\n```\n{af.get('content', '')[:500]}\n```\n")
+                        f.write("\n---\n\n")
             except OSError as e:
                 from PyQt5.QtWidgets import QMessageBox
                 QMessageBox.warning(self, "Export Error", f"Failed to write file: {e}")

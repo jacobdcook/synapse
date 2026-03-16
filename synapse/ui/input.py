@@ -233,6 +233,9 @@ class _ChatTextEdit(QPlainTextEdit):
         if event.key() in (Qt.Key_Return, Qt.Key_Enter):
             if event.modifiers() & Qt.ShiftModifier:
                 super().keyPressEvent(event)
+            elif event.modifiers() & Qt.ControlModifier:
+                self._submit()
+                return
             else:
                 self._submit()
                 return
@@ -629,8 +632,12 @@ class InputWidget(QWidget):
 
     def _add_file(self, filepath):
         try:
+            file_size = os.path.getsize(filepath)
             lower = filepath.lower()
             if lower.endswith(IMAGE_EXTENSIONS):
+                if file_size > 10 * 1024 * 1024:
+                    log.warning(f"Skipping oversized image ({file_size // 1024 // 1024}MB): {filepath}")
+                    return
                 with open(filepath, 'rb') as f:
                     data = base64.b64encode(f.read()).decode()
                 self._attached_images.append((filepath, data))
