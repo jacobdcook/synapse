@@ -149,7 +149,10 @@ class MainWindow(QMainWindow):
         self._zen_mode = False
         self._current_theme = THEMES.get(self.settings_data.get("theme", "One Dark"), THEMES["One Dark"])
         
-        unload_all_models()
+        try:
+            unload_all_models()
+        except Exception:
+            log.info("Ollama not available at startup — continuing in offline mode")
         self._setup_ui()
         
         # Start background services
@@ -2819,12 +2822,18 @@ class MainWindow(QMainWindow):
         self._conn_checker.start()
 
     def _on_connection_status_changed(self, online):
+        was_offline = getattr(self, '_ollama_was_offline', True)
         if online:
             self.conn_dot.setStyleSheet("color: #2ea043; font-size: 14px; padding: 0 4px;")
             self.conn_dot.setToolTip("Ollama Connected")
+            if was_offline:
+                log.info("Ollama came online — refreshing models")
+                self._load_models()
+            self._ollama_was_offline = False
         else:
             self.conn_dot.setStyleSheet("color: #d32f2f; font-size: 14px; padding: 0 4px;")
             self.conn_dot.setToolTip("Ollama Offline")
+            self._ollama_was_offline = True
 
     def _on_summary_done(self, summary_text, stats):
         if not self.current_conv:

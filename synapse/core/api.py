@@ -1,5 +1,7 @@
 import json
+import socket
 import urllib.request
+import urllib.error
 import logging
 import time
 from PyQt5.QtCore import QThread, pyqtSignal
@@ -10,20 +12,29 @@ log = logging.getLogger(__name__)
 ALLOWED_ROLES = {"system", "user", "assistant", "tool"}
 
 
-def _request_json(path, payload=None, timeout=10):
+def _request_json(path, payload=None, timeout=10, retries=2):
     data = None
     if payload is not None:
         data = json.dumps(payload).encode()
-    req = urllib.request.Request(
-        f"{get_ollama_url()}{path}",
-        data=data,
-        headers={"Content-Type": "application/json"},
-    )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        raw = resp.read()
-    if not raw:
-        return {}
-    return json.loads(raw.decode("utf-8", errors="replace"))
+    for attempt in range(retries + 1):
+        try:
+            req = urllib.request.Request(
+                f"{get_ollama_url()}{path}",
+                data=data,
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                raw = resp.read()
+            if not raw:
+                return {}
+            return json.loads(raw.decode("utf-8", errors="replace"))
+        except (socket.timeout, ConnectionResetError, urllib.error.URLError) as e:
+            if attempt < retries:
+                delay = min(1 * (2 ** attempt), 5)
+                log.debug(f"Ollama request retry {attempt+1}/{retries}: {e}")
+                time.sleep(delay)
+                continue
+            raise
 
 
 def get_loaded_models():
@@ -82,6 +93,60 @@ class BaseAIWorker(QThread):
 
     def stop(self):
         self._stop_flag = True
+
+    @staticmethod
+    def _classify_error(e):
+        """Classify an exception into a user-friendly message."""
+        err_str = str(e).lower()
+        if isinstance(e, urllib.error.HTTPError):
+            code = e.code
+            if code == 401:
+                return "Authentication failed — check your API key in Settings."
+            elif code == 403:
+                return "Access denied — your API key may lack permissions for this model."
+            elif code == 429:
+                return "Rate limited — too many requests. Wait a moment and try again."
+            elif code == 404:
+                return f"Model not found — verify the model name is correct."
+            elif 500 <= code < 600:
+                return f"Server error ({code}) — the API provider is having issues. Try again shortly."
+            return f"HTTP {code}: {e.reason}"
+        elif isinstance(e, urllib.error.URLError):
+            if "connection refused" in err_str:
+                return "Connection refused — is the server running? Check Settings > Ollama URL."
+            elif "name or service not known" in err_str or "nodename nor servname" in err_str:
+                return "DNS lookup failed — check your internet connection."
+            return f"Network error: {e.reason}"
+        elif isinstance(e, socket.timeout):
+            return "Request timed out — the model may be overloaded or the server is slow."
+        elif isinstance(e, ConnectionResetError):
+            return "Connection reset — the server closed the connection unexpectedly."
+        return str(e)
+
+    @staticmethod
+    def _is_transient(e):
+        """Check if an error is transient and worth retrying."""
+        if isinstance(e, urllib.error.HTTPError):
+            return e.code in (429, 502, 503, 504)
+        if isinstance(e, (socket.timeout, ConnectionResetError, ConnectionError)):
+            return True
+        if isinstance(e, urllib.error.URLError):
+            reason = str(e.reason).lower()
+            return "temporary" in reason or "timed out" in reason
+        return False
+
+    def _run_with_retry(self, fn, max_retries=2):
+        """Run fn() with retry on transient errors (429, 502-504, timeout)."""
+        for attempt in range(max_retries + 1):
+            try:
+                return fn()
+            except Exception as e:
+                if attempt < max_retries and self._is_transient(e) and not self._stop_flag:
+                    delay = min(1 * (3 ** attempt), 10)
+                    log.warning(f"Transient error (attempt {attempt+1}/{max_retries+1}), retrying in {delay}s: {e}")
+                    time.sleep(delay)
+                    continue
+                raise
 
     def _prune_messages(self, messages, max_tokens=3500):
         """
@@ -184,6 +249,10 @@ class OllamaWorker(BaseAIWorker):
                     "\nTry a smaller model first, or re-pull this model."
                 )
             
+            # For connection errors, provide actionable message
+            if isinstance(e, (urllib.error.URLError, socket.timeout, ConnectionError)):
+                err_text = self._classify_error(e)
+
             log.error(f"Worker task failed: {err_text}")
             self.error_occurred.emit(err_text)
 
@@ -263,7 +332,7 @@ class OpenAIWorker(BaseAIWorker):
             api_messages = []
             if self.system_prompt:
                 api_messages.append({"role": "system", "content": self.system_prompt})
-            
+
             pruned_history = self._prune_messages(self.messages, max_tokens=128000)
             for msg in pruned_history:
                 role = msg.get("role")
@@ -340,7 +409,7 @@ class OpenAIWorker(BaseAIWorker):
             }
             self.response_finished.emit(full_text, stats)
         except Exception as e:
-            self.error_occurred.emit(str(e))
+            self.error_occurred.emit(self._classify_error(e))
 
 class OpenRouterWorker(OpenAIWorker):
     def run(self):
@@ -433,7 +502,7 @@ class OpenRouterWorker(OpenAIWorker):
             }
             self.response_finished.emit(full_text, stats)
         except Exception as e:
-            self.error_occurred.emit(str(e))
+            self.error_occurred.emit(self._classify_error(e))
 
 class AnthropicWorker(BaseAIWorker):
     def run(self):
@@ -568,7 +637,7 @@ class AnthropicWorker(BaseAIWorker):
             }
             self.response_finished.emit(full_text, stats)
         except Exception as e:
-            self.error_occurred.emit(str(e))
+            self.error_occurred.emit(self._classify_error(e))
 
 def WorkerFactory(model, messages, system_prompt="", gen_params=None, tools=None, settings=None):
     settings = settings or {}
