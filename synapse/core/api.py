@@ -328,7 +328,7 @@ class OllamaWorker(BaseAIWorker):
 
 class OpenAIWorker(BaseAIWorker):
     def run(self):
-        try:
+        def _execute():
             api_messages = []
             if self.system_prompt:
                 api_messages.append({"role": "system", "content": self.system_prompt})
@@ -356,7 +356,7 @@ class OpenAIWorker(BaseAIWorker):
             )
 
             full_text = ""
-            tool_calls_map = {} # id -> {function: {name: "", arguments: ""}}
+            tool_calls_map = {}
             usage = {}
 
             with urllib.request.urlopen(req, timeout=60) as resp:
@@ -385,7 +385,6 @@ class OpenAIWorker(BaseAIWorker):
                                 idx = tc.get("index", 0)
                                 if idx not in tool_calls_map:
                                     tool_calls_map[idx] = {"id": tc.get("id"), "type": "function", "function": {"name": "", "arguments": ""}}
-                                
                                 if "id" in tc: tool_calls_map[idx]["id"] = tc["id"]
                                 if "function" in tc:
                                     if "name" in tc["function"]: tool_calls_map[idx]["function"]["name"] += tc["function"]["name"]
@@ -408,12 +407,15 @@ class OpenAIWorker(BaseAIWorker):
                 "total_tokens": usage.get("total_tokens", 0)
             }
             self.response_finished.emit(full_text, stats)
+
+        try:
+            self._run_with_retry(_execute)
         except Exception as e:
             self.error_occurred.emit(self._classify_error(e))
 
 class OpenRouterWorker(OpenAIWorker):
     def run(self):
-        try:
+        def _execute():
             api_messages = []
             if self.system_prompt:
                 api_messages.append({"role": "system", "content": self.system_prompt})
@@ -501,12 +503,15 @@ class OpenRouterWorker(OpenAIWorker):
                 "total_tokens": usage.get("total_tokens", 0)
             }
             self.response_finished.emit(full_text, stats)
+
+        try:
+            self._run_with_retry(_execute)
         except Exception as e:
             self.error_occurred.emit(self._classify_error(e))
 
 class AnthropicWorker(BaseAIWorker):
     def run(self):
-        try:
+        def _execute():
             api_messages = []
             anthropic_system = self.system_prompt or ""
             
@@ -636,6 +641,9 @@ class AnthropicWorker(BaseAIWorker):
                 "output_tokens": usage.get("output_tokens", 0)
             }
             self.response_finished.emit(full_text, stats)
+
+        try:
+            self._run_with_retry(_execute)
         except Exception as e:
             self.error_occurred.emit(self._classify_error(e))
 

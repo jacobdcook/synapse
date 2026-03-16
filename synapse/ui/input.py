@@ -101,6 +101,7 @@ class _SlashCompleter(QListWidget):
         ("/system", "Edit system prompt"),
         ("/search", "Search workspace"),
         ("/summarize", "Summarize to free context"),
+        ("/replay", "Step-by-step session playback"),
         ("/export", "Export conversation (md|html|json|pdf)"),
         ("/stats", "Show conversation stats"),
         ("/mcp", "Show/toggle MCP servers"),

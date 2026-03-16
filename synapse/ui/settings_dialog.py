@@ -4,7 +4,7 @@ from PyQt5.QtWidgets import (
     QPushButton, QLabel, QSlider, QSpinBox, QLineEdit,
     QComboBox, QCheckBox, QGroupBox, QFormLayout, QListWidget,
     QListWidgetItem, QMessageBox, QTableWidget, QTableWidgetItem,
-    QKeySequenceEdit, QHeaderView
+    QKeySequenceEdit, QHeaderView, QProgressBar
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from ..utils.constants import (
@@ -19,11 +19,12 @@ log = logging.getLogger(__name__)
 class SettingsDialog(QDialog):
     settings_changed = pyqtSignal(dict)
 
-    def __init__(self, settings_data, parent=None):
+    def __init__(self, settings_data, backend_manager=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Settings")
-        self.setMinimumSize(600, 500)
+        self.setMinimumSize(700, 600)
         self.settings_data = dict(settings_data)
+        self.backend_manager = backend_manager
 
         layout = QVBoxLayout(self)
 
@@ -36,6 +37,7 @@ class SettingsDialog(QDialog):
         self.tabs.addTab(self._build_providers_tab(), "Providers")
         self.tabs.addTab(self._build_voice_tab(), "Voice")
         self.tabs.addTab(self._build_shortcuts_tab(), "Shortcuts")
+        self.tabs.addTab(self._build_local_backends_tab(), "Local Backends")
         layout.addWidget(self.tabs)
 
         btn_row = QHBoxLayout()
@@ -183,6 +185,13 @@ class SettingsDialog(QDialog):
         self.anthropic_key = QLineEdit(self.settings_data.get("anthropic_key", ""))
         self.anthropic_key.setEchoMode(QLineEdit.Password)
         layout.addRow("Anthropic API Key:", self.anthropic_key)
+
+        self.hf_token = QLineEdit(self.settings_data.get("hf_token", ""))
+        self.hf_token.setEchoMode(QLineEdit.Password)
+        layout.addRow("HF Token:", self.hf_token)
+
+        self.hf_model = QLineEdit(self.settings_data.get("hf_model", "black-forest-labs/FLUX.1-schnell"))
+        layout.addRow("HF Model:", self.hf_model)
 
         self.openrouter_key = QLineEdit(self.settings_data.get("openrouter_key", ""))
         self.openrouter_key.setEchoMode(QLineEdit.Password)
@@ -409,6 +418,133 @@ class SettingsDialog(QDialog):
 
         return w
 
+    def _build_local_backends_tab(self):
+        w = QWidget()
+        layout = QVBoxLayout(w)
+
+        header = QLabel("Local AI Backends")
+        header.setStyleSheet("font-size: 16px; font-weight: bold; margin-bottom: 10px;")
+        layout.addWidget(header)
+
+        desc = QLabel("Install and manage local image generation servers (Stable Diffusion & ComfyUI).")
+        desc.setStyleSheet("color: #8b949e; margin-bottom: 20px;")
+        layout.addWidget(desc)
+
+        # SD Forge Card
+        self.sd_card = self._create_backend_card("sd", "Stable Diffusion Forge", "Powerful UI for SDXL and FLUX models.")
+        layout.addWidget(self.sd_card)
+
+        # ComfyUI Card
+        self.comfy_card = self._create_backend_card("comfy", "ComfyUI", "Node-based professional workflow engine.")
+        layout.addWidget(self.comfy_card)
+
+        layout.addStretch()
+
+        if self.backend_manager:
+            self.backend_manager.status_changed.connect(self._on_backend_status_changed)
+            self.backend_manager.install_progress.connect(self._on_install_progress)
+            
+        return w
+
+    def _create_backend_card(self, bid, name, desc):
+        group = QGroupBox(name)
+        layout = QVBoxLayout(group)
+        
+        info_row = QHBoxLayout()
+        info_text = QLabel(desc)
+        info_text.setWordWrap(True)
+        info_row.addWidget(info_text)
+        
+        status_label = QLabel("Status: Checking...")
+        status_label.setObjectName(f"{bid}_status_label")
+        info_row.addWidget(status_label)
+        layout.addLayout(info_row)
+
+        progress_bar = QProgressBar()
+        progress_bar.setObjectName(f"{bid}_progress")
+        progress_bar.hide()
+        layout.addWidget(progress_bar)
+
+        btn_row = QHBoxLayout()
+        install_btn = QPushButton("Install")
+        install_btn.setObjectName(f"{bid}_install_btn")
+        install_btn.clicked.connect(lambda: self.backend_manager.install(bid))
+        
+        start_btn = QPushButton("Start")
+        start_btn.setObjectName(f"{bid}_start_btn")
+        start_btn.clicked.connect(lambda: self.backend_manager.start(bid))
+        
+        stop_btn = QPushButton("Stop")
+        stop_btn.setObjectName(f"{bid}_stop_btn")
+        stop_btn.clicked.connect(lambda: self.backend_manager.stop(bid))
+        stop_btn.setEnabled(False)
+
+        btn_row.addWidget(install_btn)
+        btn_row.addWidget(start_btn)
+        btn_row.addWidget(stop_btn)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+        # Initial Refresh
+        if self.backend_manager:
+            status = self.backend_manager.get_status(bid)
+            self._update_card_ui(bid, status)
+
+        return group
+
+    def _on_backend_status_changed(self, bid, status):
+        self._update_card_ui(bid, status)
+
+    def _update_card_ui(self, bid, status):
+        status_label = self.findChild(QLabel, f"{bid}_status_label")
+        install_btn = self.findChild(QPushButton, f"{bid}_install_btn")
+        start_btn = self.findChild(QPushButton, f"{bid}_start_btn")
+        stop_btn = self.findChild(QPushButton, f"{bid}_stop_btn")
+        progress_bar = self.findChild(QProgressBar, f"{bid}_progress")
+
+        if not status_label: return
+
+        status_text = {
+            "not_installed": "Not Installed",
+            "installing": "Installing...",
+            "stopped": "Stopped",
+            "starting": "Starting...",
+            "running": "Running",
+            "error": "Error"
+        }.get(status, status.title())
+
+        status_label.setText(f"Status: {status_text}")
+        
+        # Color status
+        colors = {
+            "running": "#7ee787",
+            "installing": "#58a6ff",
+            "starting": "#e3b341",
+            "error": "#f85149"
+        }
+        if status in colors:
+            status_label.setStyleSheet(f"color: {colors[status]}; font-weight: bold;")
+        else:
+            status_label.setStyleSheet("")
+
+        # Button visibility/enable
+        install_btn.setEnabled(status == "not_installed")
+        start_btn.setEnabled(status == "stopped")
+        stop_btn.setEnabled(status in ["starting", "running"])
+        
+        if status == "installing":
+            progress_bar.show()
+        else:
+            progress_bar.hide()
+
+    def _on_install_progress(self, bid, progress, message):
+        progress_bar = self.findChild(QProgressBar, f"{bid}_progress")
+        status_label = self.findChild(QLabel, f"{bid}_status_label")
+        if progress_bar:
+            progress_bar.setValue(int(progress))
+        if status_label:
+            status_label.setText(f"Status: {message}")
+
     def _reset_all_shortcuts(self):
         reply = QMessageBox.question(self, "Reset All", "Reset all keyboard shortcuts to defaults?", QMessageBox.Yes|QMessageBox.No)
         if reply == QMessageBox.Yes:
@@ -514,9 +650,11 @@ class SettingsDialog(QDialog):
         self.settings_data["workspace_dir"] = self.workspace_dir.text().strip()
         self.settings_data["mcp_servers"] = self._mcp_servers
 
-        self.settings_data["openai_key"] = self.openai_key.text()
-        self.settings_data["anthropic_key"] = self.anthropic_key.text()
-        self.settings_data["openrouter_key"] = self.openrouter_key.text()
+        self.settings_data["openai_key"] = self.openai_key.text().strip()
+        self.settings_data["anthropic_key"] = self.anthropic_key.text().strip()
+        self.settings_data["openrouter_key"] = self.openrouter_key.text().strip()
+        self.settings_data["hf_token"] = self.hf_token.text().strip()
+        self.settings_data["hf_model"] = self.hf_model.text().strip()
 
         # Save Shortcuts
         new_shortcuts = {}

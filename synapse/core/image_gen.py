@@ -33,6 +33,8 @@ class ImageGenWorker(QThread):
                 result = self._run_comfy()
             elif self.provider == "openai":
                 result = self._run_openai()
+            elif self.provider == "hf":
+                result = self._run_hf()
             else:
                 result = {"success": False, "error": f"Unknown provider: {self.provider}"}
             
@@ -41,7 +43,7 @@ class ImageGenWorker(QThread):
             log.error(f"Image generation error: {e}")
             err = str(e)
             if "Connection refused" in err:
-                provider_name = {"sd": "Stable Diffusion (A1111/Forge)", "comfy": "ComfyUI", "openai": "OpenAI"}.get(self.provider, self.provider)
+                provider_name = {"sd": "Stable Diffusion (A1111/Forge)", "comfy": "ComfyUI", "openai": "OpenAI", "hf": "Hugging Face"}.get(self.provider, self.provider)
                 err = f"{provider_name} server not running.\n\nThis backend requires a local server. Install and start it first."
             self.finished.emit({"success": False, "error": err})
 
@@ -144,6 +146,54 @@ class ImageGenWorker(QThread):
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    def _run_hf(self):
+        """Hugging Face Inference API implementation."""
+        token = self.params.get("hf_token")
+        model = self.params.get("hf_model", "black-forest-labs/FLUX.1-schnell")
+        
+        endpoint = f"https://router.huggingface.co/models/{model}"
+        payload = {
+            "inputs": self.params.get("prompt", ""),
+            "parameters": {
+                "negative_prompt": self.params.get("negative_prompt", ""),
+            }
+        }
+
+        req = urllib.request.Request(
+            endpoint,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json"
+            }
+        )
+        if token:
+            req.add_header("Authorization", f"Bearer {token}")
+
+        try:
+            with urllib.request.urlopen(req, timeout=120) as response:
+                img_data = response.read()
+                
+                filename = f"hf_{uuid.uuid4().hex[:8]}.png"
+                filepath = GEN_DIR / filename
+                with open(filepath, "wb") as f:
+                    f.write(img_data)
+                
+                return {
+                    "success": True,
+                    "path": str(filepath),
+                    "prompt": payload["inputs"],
+                    "provider": f"HF ({model})"
+                }
+        except urllib.error.HTTPError as e:
+            err_data = e.read().decode()
+            try:
+                msg = json.loads(err_data).get("error", str(e))
+            except:
+                msg = str(e)
+            return {"success": False, "error": f"Hugging Face Error: {msg}"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
     def _run_comfy(self):
         """ComfyUI API — builds a minimal txt2img workflow and polls for result."""
         import time
@@ -159,6 +209,19 @@ class ImageGenWorker(QThread):
             import random
             seed = random.randint(0, 2**32 - 1)
 
+        # Try to find available checkpoints via API
+        ckpt_name = self.params.get("checkpoint", "v1-5-pruned-emaonly.safetensors")
+        try:
+            info_url = f"{url.rstrip('/')}/object_info/CheckpointLoaderSimple"
+            with urllib.request.urlopen(info_url, timeout=5) as resp:
+                info = json.loads(resp.read())
+                available = info.get("CheckpointLoaderSimple", {}).get("input", {}).get("required", {}).get("ckpt_name", [[]])[0]
+                if available and ckpt_name not in available:
+                    log.info(f"Requested checkpoint {ckpt_name} not found, using {available[0]}")
+                    ckpt_name = available[0]
+        except Exception as e:
+            log.warning(f"Failed to fetch ComfyUI checkpoints: {e}")
+
         workflow = {
             "3": {"class_type": "KSampler", "inputs": {
                 "seed": seed, "steps": steps, "cfg": cfg,
@@ -168,7 +231,7 @@ class ImageGenWorker(QThread):
                 "negative": ["7", 0], "latent_image": ["5", 0]
             }},
             "4": {"class_type": "CheckpointLoaderSimple", "inputs": {
-                "ckpt_name": self.params.get("checkpoint", "v1-5-pruned-emaonly.safetensors")
+                "ckpt_name": ckpt_name
             }},
             "5": {"class_type": "EmptyLatentImage", "inputs": {
                 "width": width, "height": height, "batch_size": 1
@@ -197,7 +260,11 @@ class ImageGenWorker(QThread):
             data = json.loads(resp.read())
         prompt_id = data.get("prompt_id")
         if not prompt_id:
-            return {"success": False, "error": "ComfyUI did not return a prompt_id"}
+            # Check if this might be due to missing model
+            node_errors = data.get("node_errors", {})
+            if "4" in node_errors: # Loader node
+                return {"success": False, "error": "ComfyUI Error: Model not found. Please place a checkpoint in 'models/checkpoints' folder."}
+            return {"success": False, "error": f"ComfyUI Error: {data.get('error', 'Unknown error')}"}
 
         for _ in range(300):
             if self._stop_flag:
@@ -222,7 +289,15 @@ class ImageGenWorker(QThread):
                             with open(filepath, "wb") as f:
                                 f.write(img_data)
                             return {"success": True, "path": str(filepath), "prompt": prompt_text, "provider": "ComfyUI"}
-                    return {"success": False, "error": "ComfyUI returned no images"}
+                    return {"success": False, "error": "ComfyUI returned no images. Check if your workflow/model is correct."}
+            except urllib.error.HTTPError as e:
+                err_data = e.read().decode()
+                try:
+                    err_json = json.loads(err_data)
+                    if "node_errors" in err_json:
+                        return {"success": False, "error": "ComfyUI Workflow Error: Missing or invalid model/nodes."}
+                except: pass
+                return {"success": False, "error": f"ComfyUI HTTP Error: {e.code}"}
             except urllib.error.URLError:
                 continue
 

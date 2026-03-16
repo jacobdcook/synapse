@@ -80,8 +80,10 @@ from .playground import PlaygroundPanel
 from .arena_dialog import ArenaDialog
 from .prompt_lab import PromptLab
 from .consensus_dialog import ConsensusDialog
+from .replay_dialog import ReplayDialog
 from ..core.code_extractor import CodeExtractor
 from .shortcuts_dialog import ShortcutsDialog
+from ..core.backend_manager import BackendManager
 
 log = logging.getLogger(__name__)
 
@@ -141,6 +143,7 @@ class MainWindow(QMainWindow):
         self._recursion_depth = 0
         self._max_recursion = 10
         self._auto_continue_count = 0
+        self.backend_manager = BackendManager()
         self._shortcut_objects = []
         self._consensus_active = False
         self._consensus_responses = {}
@@ -244,7 +247,7 @@ class MainWindow(QMainWindow):
         scheduler.task_started.connect(self._on_scheduled_task)
 
         self.image_gen_backend = ImageGenerator()
-        self.image_gen_sidebar = ImageGenSidebar()
+        self.image_gen_sidebar = ImageGenSidebar(backend_manager=self.backend_manager)
         self.image_gen_sidebar.generation_requested.connect(self._on_image_gen_requested)
         self.image_gen_sidebar.image_selected.connect(self._on_image_selected)
         
@@ -289,18 +292,17 @@ class MainWindow(QMainWindow):
         self.main_splitter.addWidget(self.activity_bar)
         self.main_splitter.addWidget(self.sidebar_container)
         
-        # Editor Area (Chat Tabs & Input)
-        self.editor_area = QWidget()
-        self.editor_layout = QVBoxLayout(self.editor_area)
-        self.editor_layout.setContentsMargins(0, 0, 0, 0)
-        self.editor_layout.setSpacing(0)
+        self.chat_area = QWidget()
+        self.chat_layout = QVBoxLayout(self.chat_area)
+        self.chat_layout.setContentsMargins(0, 0, 0, 0)
+        self.chat_layout.setSpacing(0)
         
         self.chat_tabs = QTabWidget()
         self.chat_tabs.setTabsClosable(True)
         self.chat_tabs.setMovable(True)
         self.chat_tabs.tabCloseRequested.connect(self._on_close_chat_tab)
         self.chat_tabs.currentChanged.connect(self._on_chat_tab_changed)
-        self.editor_layout.addWidget(self.chat_tabs)
+        self.chat_layout.addWidget(self.chat_tabs)
 
         self.input_widget = InputWidget()
         self.input_widget.message_submitted.connect(self._send_message)
@@ -310,12 +312,19 @@ class MainWindow(QMainWindow):
         self.input_widget.hands_free_toggled.connect(self._on_hands_free_toggled)
         self.input_widget.stop_btn.clicked.connect(self._stop_generation)
         self.input_widget.force_send_requested.connect(self._force_send_next)
-        self.editor_layout.addWidget(self.input_widget)
+        self.chat_layout.addWidget(self.input_widget)
+
+        # Central Stack for switching between Chat and Editor
+        self.central_stack = QStackedWidget()
+        self.central_stack.addWidget(self.chat_area)      # Index 0: Chat
+        self.central_stack.addWidget(self.editor_splitter) # Index 1: Code Editor
+        
+        self.main_splitter.addWidget(self.central_stack)
 
         # Connect voice signals after input_widget is created
         self.voice_manager.mic_level.connect(self.input_widget.update_mic_level)
         
-        self.main_splitter.addWidget(self.editor_area)
+        # Removed redundant addWidget(self.editor_area)
         
         # Set initial sizes for splitter: Bar (48), Sidebar (260), Editor (Remainder)
         self.main_splitter.setSizes([48, 260, 800])
@@ -436,6 +445,23 @@ class MainWindow(QMainWindow):
         self.mcp_status_label = QLabel("MCP: —")
         self.mcp_status_label.setStyleSheet("color: #8b949e; font-size: 11px; padding: 0 8px;")
         self.status_bar.addWidget(self.mcp_status_label)
+
+        # Local Backends Status
+        self.sd_status_icon = ClickableLabel("SD: \u25CF")
+        self.sd_status_icon.setStyleSheet("color: #8b949e; font-size: 11px; padding: 0 8px;")
+        self.sd_status_icon.setToolTip("Stable Diffusion Forge (Stopped)")
+        self.sd_status_icon.clicked.connect(lambda: self._toggle_backend("sd"))
+        self.status_bar.addWidget(self.sd_status_icon)
+        
+        self.comfy_status_icon = ClickableLabel("Comfy: \u25CF")
+        self.comfy_status_icon.setStyleSheet("color: #8b949e; font-size: 11px; padding: 0 8px;")
+        self.comfy_status_icon.setToolTip("ComfyUI (Stopped)")
+        self.comfy_status_icon.clicked.connect(lambda: self._toggle_backend("comfy"))
+        self.status_bar.addWidget(self.comfy_status_icon)
+        
+        if self.backend_manager:
+            self.backend_manager.status_changed.connect(self._update_backend_status_bar)
+            self._update_backend_status_bar()
 
         self.context_label = QLabel("Context: 0/4096")
         self.context_label.setStyleSheet("padding: 0 10px; color: #8b949e;")
@@ -642,6 +668,16 @@ class MainWindow(QMainWindow):
             self.bookmarks_panel.show()
         else:
             self.sidebar_stack.setCurrentIndex(index)
+        
+        # Switch central area based on activity
+        if index == 0: # Explorer
+            self.central_stack.setCurrentIndex(1) # Show Editor
+        elif index == 1: # Chat
+            self.central_stack.setCurrentIndex(0) # Show Chat
+        elif index in (2, 3, 4, 11): # Models, Plan, Git, Workflows usually need Editor
+            self.central_stack.setCurrentIndex(1)
+        else:
+            self.central_stack.setCurrentIndex(0) # Default to Chat
 
     def _show_stats(self):
         if not self.current_conv:
@@ -1534,6 +1570,12 @@ class MainWindow(QMainWindow):
         if len([m for m in conv["messages"] if m["role"] == "assistant"]) == 1 and conv.get("title") == "New Chat":
             self._auto_title(conv)
 
+        # Smart Auto-Tagging (F12) - Trigger after first assistant turn or every 5 user messages
+        user_msgs = [m for m in conv["messages"] if m["role"] == "user"]
+        assistant_msgs = [m for m in conv["messages"] if m["role"] == "assistant"]
+        if (len(assistant_msgs) == 1 or (len(user_msgs) > 0 and len(user_msgs) % 5 == 0)) and not conv.get("tags"):
+            self._auto_tag_conversation()
+
         self._active_stream_conv = None
         self._active_stream_tab_index = -1
 
@@ -1716,6 +1758,10 @@ class MainWindow(QMainWindow):
                 self.status_label.setText("Usage: /export [md|html|json|pdf]")
         elif cmd == "/stats":
             if self.current_conv:
+                self._show_conv_stats()
+        elif cmd == "/replay":
+            self._show_replay()
+        elif cmd == "/help":
                 msgs = self.current_conv["messages"]
                 total = len(msgs)
                 user_msgs = sum(1 for m in msgs if m["role"] == "user")
@@ -2321,6 +2367,8 @@ class MainWindow(QMainWindow):
 
     def _update_mcp_status(self):
         """Update MCP status indicator in status bar."""
+        if not hasattr(self, "mcp_status_label"):
+            return
         statuses = self.mcp_manager.get_server_statuses()
         if not statuses:
             self.mcp_status_label.setText("MCP: —")
@@ -2341,6 +2389,36 @@ class MainWindow(QMainWindow):
 
         names = ", ".join(s["name"] for s in statuses if s["connected"])
         self.mcp_status_label.setToolTip(f"Connected: {names}" if names else "No MCP servers connected")
+
+    def _update_backend_status_bar(self, backend_id=None, status=None):
+        if not self.backend_manager:
+            return
+            
+        for bid in ["sd", "comfy"]:
+            status = self.backend_manager.get_status(bid)
+            label = self.sd_status_icon if bid == "sd" else self.comfy_status_icon
+            name = "Stable Diffusion" if bid == "sd" else "ComfyUI"
+            
+            colors = {
+                "running": "#7ee787",
+                "error": "#f85149",
+                "starting": "#e3b341",
+                "installing": "#58a6ff",
+                "stopped": "#8b949e",
+                "not_installed": "#484f58"
+            }
+            color = colors.get(status, "#8b949e")
+            label.setStyleSheet(f"color: {color}; font-size: 11px; padding: 0 8px;")
+            label.setToolTip(f"{name} ({status.title()})")
+
+    def _toggle_backend(self, backend_id):
+        if not self.backend_manager:
+            return
+        status = self.backend_manager.get_status(backend_id)
+        if status == "stopped":
+            self.backend_manager.start(backend_id)
+        elif status == "running":
+            self.backend_manager.stop(backend_id)
 
     def _restore_workspace(self):
         recent = self.settings_data.get("recent_projects", [])
@@ -2426,7 +2504,7 @@ class MainWindow(QMainWindow):
                 compare_dlg.exec_()
 
     def _open_settings(self):
-        dlg = SettingsDialog(self.settings_data, self)
+        dlg = SettingsDialog(self.settings_data, backend_manager=self.backend_manager, parent=self)
         dlg.settings_changed.connect(self._on_settings_changed)
         if hasattr(dlg, 'apply_theme'):
             dlg.apply_theme(self._current_theme)
@@ -2531,6 +2609,7 @@ class MainWindow(QMainWindow):
             "conv_stats": self._show_conv_stats,
             "session_replay": self._start_replay,
             "auto_tag": self._auto_tag_conversation,
+            "replay": self._show_replay,
             "import_theme": self._import_custom_theme,
             "extract_code": self._extract_code,
             "consensus": self._open_consensus,
@@ -2991,6 +3070,9 @@ class MainWindow(QMainWindow):
     def _on_image_gen_requested(self, provider, params):
         if provider == "openai":
             params["api_key"] = self.settings_data.get("openai_key")
+        elif provider == "hf":
+            params["hf_token"] = self.settings_data.get("hf_token")
+            params["hf_model"] = self.settings_data.get("hf_model", "black-forest-labs/FLUX.1-schnell")
         self.image_gen_backend.generate(provider, params, self._on_image_gen_finished)
 
     def _on_image_gen_finished(self, result):
@@ -3255,6 +3337,13 @@ class MainWindow(QMainWindow):
             self.store.save(self.current_conv)
             self.status_label.setText(f"Tagged: {', '.join(tags)}")
 
+    # --- F31: Session Replay ---
+    def _show_replay(self):
+        if not self.current_conv:
+            return
+        dlg = ReplayDialog(self.current_conv, self)
+        dlg.exec_()
+
     # --- F29: Custom CSS Themes ---
     def _import_custom_theme(self):
         path, _ = QFileDialog.getOpenFileName(self, "Import Theme", "", "QSS Files (*.qss);;All (*)")
@@ -3312,3 +3401,9 @@ class MainWindow(QMainWindow):
         if hasattr(self, '_current_theme'):
             dlg.apply_theme(self._current_theme)
         dlg.exec_()
+
+class ClickableLabel(QLabel):
+    clicked = pyqtSignal()
+    def mousePressEvent(self, event):
+        self.clicked.emit()
+        super().mousePressEvent(event)

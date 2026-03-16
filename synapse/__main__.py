@@ -1,10 +1,10 @@
+from PyQt5 import QtWebEngineWidgets  # Must be imported before QApplication
 import sys
 import logging
 import logging.handlers
 from pathlib import Path
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication, QMessageBox
-from PyQt5 import QtWebEngineWidgets  # Must be imported before QApplication
 from .utils.constants import APP_NAME, CONFIG_DIR
 
 # Configure logging — use proper data directory with rotation
