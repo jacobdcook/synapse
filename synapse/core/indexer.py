@@ -88,6 +88,8 @@ def save_index(index):
 
 def cosine_similarity(v1, v2):
     """Calculate cosine similarity between two vectors."""
+    if np is None:
+        return 0.0
     if v1 is None or v2 is None or len(v1) == 0 or len(v2) == 0:
         return 0.0
     v1 = np.array(v1)

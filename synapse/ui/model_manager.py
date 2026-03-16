@@ -302,7 +302,7 @@ class ModelPullWorker(QThread):
                 for line in resp:
                     try:
                         chunk = json.loads(line.decode().strip())
-                    except: continue
+                    except (json.JSONDecodeError, UnicodeDecodeError): continue
                     status = chunk.get("status", "")
                     total = chunk.get("total", 0)
                     completed = chunk.get("completed", 0)
@@ -574,3 +574,38 @@ class ModelManagerPanel(QWidget):
         if success:
             self.refresh()
             self.models_changed.emit()
+
+    def apply_theme(self, theme):
+        bg = theme.get("bg", "#1a1b1e")
+        fg = theme.get("fg", "#e6edf3")
+        input_bg = theme.get("input_bg", "#0d1117")
+        border = theme.get("border", "#30363d")
+        accent = theme.get("accent", "#58a6ff")
+        header_bg = theme.get("header_bg", "#161b22")
+        muted = "#8b949e"
+
+        self.tabs.setStyleSheet(f"""
+            QTabWidget::pane {{ border-top: 1px solid {border}; background: transparent; }}
+            QTabBar::tab {{
+                background: transparent;
+                color: {muted};
+                padding: 10px 20px;
+                font-size: 13px;
+                font-weight: 500;
+            }}
+            QTabBar::tab:selected {{
+                color: {fg};
+                border-bottom: 2px solid {accent};
+            }}
+            QTabBar::tab:hover {{ color: {fg}; }}
+        """)
+
+        for title_label in self.findChildren(QLabel):
+            if title_label.text() in ("Model Discovery", "Explore the Hub"):
+                title_label.setStyleSheet(f"font-size: 20px; font-weight: bold; color: {fg};")
+
+        self.pull_status.setStyleSheet(f"color: {muted}; font-size: 11px;")
+        self.pull_input.setStyleSheet(f"padding: 5px; border-radius: 6px; background: {input_bg}; color: {fg}; border: 1px solid {border};")
+        self.hf_search_input.setStyleSheet(f"padding: 6px; border-radius: 6px; background: {input_bg}; color: {fg}; border: 1px solid {border};")
+        self.scroll_content.setStyleSheet(f"background: transparent;")
+        self.hf_content.setStyleSheet(f"background: transparent;")

@@ -394,20 +394,29 @@ class SidebarWidget(QWidget):
         if not conv: return
         path, _ = QFileDialog.getSaveFileName(self, "Export Conversation", f"{conv['title']}.md", "Markdown (*.md)")
         if path:
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(f"# {conv['title']}\n\n")
-                f.write(f"*Model: {conv['model']}*\n")
-                f.write(f"*Date: {conv['created_at'][:10]}*\n\n---\n\n")
-                for msg in conv.get("messages", []):
-                    role = msg["role"].upper()
-                    f.write(f"### {role}\n{msg['content']}\n\n---\n\n")
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(f"# {conv['title']}\n\n")
+                    f.write(f"*Model: {conv.get('model', 'Unknown')}*\n")
+                    created = conv.get('created_at', '')
+                    f.write(f"*Date: {created[:10] if created else 'Unknown'}*\n\n---\n\n")
+                    for msg in conv.get("messages", []):
+                        role = msg.get("role", "unknown").upper()
+                        f.write(f"### {role}\n{msg.get('content', '')}\n\n---\n\n")
+            except OSError as e:
+                from PyQt5.QtWidgets import QMessageBox
+                QMessageBox.warning(self, "Export Error", f"Failed to write file: {e}")
 
     def _export_html(self, conv_id):
         conv = self.store.load(conv_id)
         if not conv: return
         path, _ = QFileDialog.getSaveFileName(self, "Export as HTML", f"{conv['title']}.html", "HTML (*.html)")
         if not path: return
-        renderer = ChatRenderer()
-        html = renderer.build_html(conv.get("messages", []), [])
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(html)
+        try:
+            renderer = ChatRenderer()
+            html = renderer.build_html(conv.get("messages", []), [])
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(html)
+        except OSError as e:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Export Error", f"Failed to write file: {e}")

@@ -1,5 +1,7 @@
 import json
 import logging
+import os
+import tempfile
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from ..utils.constants import CONFIG_DIR
@@ -34,8 +36,18 @@ class AnalyticsManager:
 
     def _save(self):
         try:
-            with open(ANALYTICS_FILE, "w") as f:
-                json.dump(self.logs, f, indent=2)
+            ANALYTICS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp_path = tempfile.mkstemp(dir=str(ANALYTICS_FILE.parent), suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w") as f:
+                    json.dump(self.logs, f, indent=2)
+                os.replace(tmp_path, str(ANALYTICS_FILE))
+            except Exception:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
         except Exception as e:
             log.error(f"Failed to save analytics: {e}")
 

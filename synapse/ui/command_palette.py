@@ -78,3 +78,22 @@ class CommandPalette(QDialog):
                 self._on_activated(current)
         else:
             super().keyPressEvent(event)
+
+    def apply_theme(self, theme):
+        bg = theme.get("bg", "#1a1b1e")
+        fg = theme.get("fg", "#e6edf3")
+        input_bg = theme.get("input_bg", "#0d1117")
+        border = theme.get("border", "#30363d")
+        accent = theme.get("accent", "#58a6ff")
+        header_bg = theme.get("header_bg", "#161b22")
+
+        self.search.setStyleSheet(
+            f"padding: 8px; font-size: 14px; background: {input_bg}; "
+            f"color: {fg}; border: 1px solid {border}; border-radius: 6px;"
+        )
+        self.list_widget.setStyleSheet(
+            f"QListWidget {{ background: {header_bg}; border: 1px solid {border}; "
+            f"color: {fg}; font-size: 13px; }}"
+            f"QListWidget::item {{ padding: 6px 10px; }}"
+            f"QListWidget::item:selected {{ background: {accent}; color: white; }}"
+        )

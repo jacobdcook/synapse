@@ -1,5 +1,7 @@
 import json
 import logging
+import os
+import tempfile
 from pathlib import Path
 from ..utils.constants import CONFIG_DIR
 
@@ -29,8 +31,18 @@ class MemoryManager:
 
     def save(self):
         try:
-            with open(self.memory_file, "w") as f:
-                json.dump(self.memory, f, indent=4)
+            self.memory_file.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp_path = tempfile.mkstemp(dir=str(self.memory_file.parent), suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w") as f:
+                    json.dump(self.memory, f, indent=4)
+                os.replace(tmp_path, str(self.memory_file))
+            except Exception:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
         except Exception as e:
             log.error(f"Failed to save memory: {e}")
 

@@ -95,3 +95,17 @@ class SystemPromptDialog(QDialog):
     def _apply(self):
         self.prompt_changed.emit(self.editor.toPlainText())
         self.accept()
+
+    def apply_theme(self, theme):
+        bg = theme.get("bg", "#1a1b1e")
+        fg = theme.get("fg", "#e6edf3")
+        input_bg = theme.get("input_bg", "#0d1117")
+        border = theme.get("border", "#30363d")
+        self.setStyleSheet(f"""
+            QDialog {{ background: {bg}; color: {fg}; }}
+            QPlainTextEdit {{ background: {input_bg}; color: {fg}; border: 1px solid {border}; }}
+            QComboBox {{ background: {input_bg}; color: {fg}; border: 1px solid {border}; padding: 4px; }}
+            QPushButton {{ background: {border}; color: {fg}; border: none; padding: 6px 16px; border-radius: 4px; }}
+            QPushButton:hover {{ background: {input_bg}; }}
+            QLabel {{ color: {fg}; }}
+        """)

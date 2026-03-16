@@ -35,7 +35,6 @@ class ConversationStore:
             except (json.JSONDecodeError, KeyError) as e:
                 log.warning(f"Skipping corrupted conversation file {f}: {e}")
                 continue
-        convos.sort(key=lambda c: (not c.get("pinned", False), c["updated_at"]), reverse=False)
         pinned = [c for c in convos if c.get("pinned")]
         unpinned = [c for c in convos if not c.get("pinned")]
         pinned.sort(key=lambda c: c["updated_at"], reverse=True)

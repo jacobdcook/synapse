@@ -173,7 +173,7 @@ class MCPServerConnection(QObject):
             try:
                 self._proc.terminate()
                 self._proc.wait(timeout=5)
-            except:
+            except Exception:
                 self._proc.kill()
             self._proc = None
 
@@ -241,11 +241,12 @@ class MCPServerConnection(QObject):
         self._schedule_reconnect()
 
     def _schedule_reconnect(self):
-        """Schedule a reconnect attempt after 5 seconds."""
+        """Schedule a reconnect with exponential backoff."""
         if self._retry_count < self._max_retries:
             self._retry_count += 1
-            log.info(f"Scheduling reconnect for {self.name} (attempt {self._retry_count}/{self._max_retries})")
-            QTimer.singleShot(5000, self.connect)
+            delay = min(5000 * (2 ** (self._retry_count - 1)), 60000)
+            log.info(f"Scheduling reconnect for {self.name} in {delay}ms (attempt {self._retry_count}/{self._max_retries})")
+            QTimer.singleShot(delay, self.connect)
         else:
             log.error(f"Max reconnect attempts reached for {self.name}")
 

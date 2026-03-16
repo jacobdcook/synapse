@@ -146,3 +146,42 @@ class AnalyticsSidebar(QWidget):
             empty = QLabel("No data yet")
             empty.setStyleSheet("color: #484f58; font-style: italic;")
             self.breakdown_layout.addWidget(empty)
+
+    def apply_theme(self, theme):
+        bg = theme.get("bg", "#1a1b1e")
+        fg = theme.get("fg", "#e6edf3")
+        sidebar_bg = theme.get("sidebar_bg", "#1e1f23")
+        header_bg = theme.get("header_bg", "#161b22")
+        accent = theme.get("accent", "#58a6ff")
+        input_bg = theme.get("input_bg", "#0d1117")
+        border = theme.get("border", "#30363d")
+        muted = "#8b949e"
+
+        for lbl in self.findChildren(QLabel):
+            if lbl.text() == "Usage Analytics":
+                lbl.setStyleSheet(f"font-size: 18px; font-weight: 700; color: {fg}; margin-bottom: 8px;")
+
+        self.token_card.setStyleSheet(f"""
+            #StatCard {{
+                background: {sidebar_bg};
+                border: 1px solid {border};
+                border-radius: 12px;
+                padding: 16px;
+            }}
+        """)
+        self.cost_card.setStyleSheet(f"""
+            #StatCard {{
+                background: {sidebar_bg};
+                border: 1px solid {border};
+                border-radius: 12px;
+                padding: 16px;
+            }}
+        """)
+
+        self.breakdown_group.setStyleSheet(
+            f"background: {header_bg}; border: 1px solid {border}; border-radius: 12px; padding: 12px;"
+        )
+
+        for lbl in self.breakdown_group.findChildren(QLabel):
+            if lbl.text() == "Model Breakdown":
+                lbl.setStyleSheet(f"color: {fg}; font-weight: 600; margin-bottom: 8px;")

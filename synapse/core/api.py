@@ -325,7 +325,9 @@ class OpenAIWorker(BaseAIWorker):
                         
                         if choices[0].get("finish_reason") == "length" or self._is_truncated(full_text, choices[0].get("finish_reason")):
                             self.truncated.emit()
-                    except Exception: continue
+                    except Exception as e:
+                        log.debug(f"Stream chunk parse error: {e}")
+                        continue
 
             if tool_calls_map:
                 tool_calls = list(tool_calls_map.values())
@@ -416,7 +418,9 @@ class OpenRouterWorker(OpenAIWorker):
                         
                         if choices[0].get("finish_reason") == "length" or self._is_truncated(full_text, choices[0].get("finish_reason")):
                             self.truncated.emit()
-                    except Exception: continue
+                    except Exception as e:
+                        log.debug(f"Stream chunk parse error: {e}")
+                        continue
 
             if tool_calls_map:
                 tool_calls = list(tool_calls_map.values())
@@ -467,7 +471,7 @@ class AnthropicWorker(BaseAIWorker):
                                 "name": tc["function"]["name"],
                                 "input": args
                             })
-                        except: continue
+                        except (KeyError, json.JSONDecodeError): continue
                     api_messages.append({"role": "assistant" if role == "assistant" else "user", "content": content_list})
                 else:
                     api_messages.append({"role": "assistant" if role == "assistant" else "user", "content": content})
@@ -551,7 +555,9 @@ class AnthropicWorker(BaseAIWorker):
                         
                         if chunk.get("delta", {}).get("stop_reason") == "max_tokens" or (ctype == "message_stop" and self._is_truncated(full_text, chunk.get("message", {}).get("stop_reason"))):
                             self.truncated.emit()
-                    except Exception: continue
+                    except Exception as e:
+                        log.debug(f"Stream chunk parse error: {e}")
+                        continue
 
             if tool_calls:
                 self.tool_calls_received.emit(tool_calls)

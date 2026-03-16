@@ -108,6 +108,8 @@ class ImageGenWorker(QThread):
         try:
             with urllib.request.urlopen(req, timeout=120) as response:
                 data = json.loads(response.read().decode("utf-8"))
+                if not data.get("data"):
+                    return {"success": False, "error": "No images returned from API"}
                 img_url = data["data"][0]["url"]
                 
                 # Download the image
@@ -129,7 +131,7 @@ class ImageGenWorker(QThread):
             err_data = e.read().decode()
             try:
                 msg = json.loads(err_data)["error"]["message"]
-            except:
+            except (json.JSONDecodeError, KeyError):
                 msg = str(e)
             return {"success": False, "error": f"OpenAI Error: {msg}"}
         except Exception as e:

@@ -464,8 +464,34 @@ class SettingsDialog(QDialog):
         l.addWidget(WhisperManagerPanel())
         dlg.exec_()
 
+    def apply_theme(self, theme):
+        bg = theme.get("bg", "#1a1b1e")
+        fg = theme.get("fg", "#e6edf3")
+        input_bg = theme.get("input_bg", "#0d1117")
+        border = theme.get("border", "#30363d")
+        accent = theme.get("accent", "#58a6ff")
+        self.setStyleSheet(f"""
+            QDialog {{ background: {bg}; color: {fg}; }}
+            QTabWidget::pane {{ border: 1px solid {border}; background: {bg}; }}
+            QTabBar::tab {{ background: {input_bg}; color: {fg}; padding: 6px 12px; border: 1px solid {border}; }}
+            QTabBar::tab:selected {{ background: {bg}; color: {accent}; }}
+            QLineEdit, QSpinBox, QComboBox {{ background: {input_bg}; color: {fg}; border: 1px solid {border}; border-radius: 4px; padding: 4px; }}
+            QCheckBox {{ color: {fg}; }}
+            QGroupBox {{ color: {fg}; border: 1px solid {border}; border-radius: 4px; margin-top: 8px; padding-top: 12px; }}
+            QGroupBox::title {{ color: {accent}; }}
+            QLabel {{ color: {fg}; }}
+            QPushButton {{ background: {border}; color: {fg}; border: none; padding: 6px 16px; border-radius: 4px; }}
+            QPushButton:hover {{ background: {input_bg}; }}
+            QSlider::groove:horizontal {{ background: {border}; height: 4px; border-radius: 2px; }}
+            QSlider::handle:horizontal {{ background: {accent}; width: 14px; margin: -5px 0; border-radius: 7px; }}
+        """)
+
     def _save(self):
-        self.settings_data["ollama_url"] = self.ollama_url.text().strip()
+        ollama_url = self.ollama_url.text().strip()
+        if ollama_url and not ollama_url.startswith(("http://", "https://")):
+            QMessageBox.warning(self, "Invalid URL", "Ollama URL must start with http:// or https://")
+            return
+        self.settings_data["ollama_url"] = ollama_url
         self.settings_data["auto_title"] = self.auto_title_check.isChecked()
         self.settings_data["notification_sound"] = self.notification_check.isChecked()
         self.settings_data["auto_exec"] = self.auto_exec_check.isChecked()

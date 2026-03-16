@@ -657,16 +657,27 @@ class MainWindow(QMainWindow):
         text += f"<b>Messages:</b> {msg_count}<br>"
         text += f"<b>Est. Tokens:</b> {int(tokens)}<br>"
         text += f"<b>Model:</b> {self.current_conv.get('model', 'Unknown')}<br>"
-        if "created_at" in self.current_conv:
-            text += f"<b>Created:</b> {self.current_conv['created_at'][:10]}<br>"
+        created = self.current_conv.get("created_at", "")
+        if created:
+            text += f"<b>Created:</b> {created[:10]}<br>"
         
         QMessageBox.information(self, "Stats", text)
 
     def _on_bookmark_selected(self, conv_id, msg_id):
         self._load_conversation(conv_id)
-        # TODO: Scroll to msg_id if possible
         if len(self.activity_bar.buttons) > 1:
             self.activity_bar.buttons[1].click()
+        if msg_id and self.current_conv:
+            for i, msg in enumerate(self.current_conv.get("messages", [])):
+                if msg.get("id") == msg_id:
+                    idx = self.chat_tabs.currentIndex()
+                    tab_widget = self.chat_tabs.widget(idx) if idx >= 0 else None
+                    if tab_widget:
+                        from PyQt5.QtWebEngineWidgets import QWebEngineView
+                        view = tab_widget.findChild(QWebEngineView)
+                        if view:
+                            view.page().runJavaScript(f"document.querySelectorAll('.message')[{i}]?.scrollIntoView({{behavior:'smooth',block:'center'}});")
+                    break
 
     def _open_table_editor(self):
         dialog = TableEditorDialog(parent=self)
@@ -859,22 +870,23 @@ class MainWindow(QMainWindow):
         self.input_widget.focus_input()
 
     def _on_close_chat_tab(self, index):
-        self._tab_conversations.pop(index, None)
         if self.chat_tabs.count() > 1:
             self.chat_tabs.removeTab(index)
+            self._tab_conversations.pop(index, None)
             self._reindex_tab_conversations()
         else:
+            self._tab_conversations.pop(index, None)
             self._new_chat()
             self.chat_tabs.removeTab(0)
             self._reindex_tab_conversations()
 
     def _reindex_tab_conversations(self):
-        old = self._tab_conversations
+        old = dict(self._tab_conversations)
+        tab_count = self.chat_tabs.count()
         new_map = {}
-        sorted_keys = sorted(old.keys())
         new_idx = 0
-        for old_idx in sorted_keys:
-            if old_idx in old and new_idx < self.chat_tabs.count():
+        for old_idx in sorted(old.keys()):
+            if new_idx < tab_count:
                 new_map[new_idx] = old[old_idx]
                 new_idx += 1
         self._tab_conversations = new_map
@@ -890,12 +902,14 @@ class MainWindow(QMainWindow):
         self.title_label.setStyleSheet(f"font-weight: bold; font-size: 16px; color: {theme['accent']}; letter-spacing: 1px;")
         for widget in (
             self.activity_bar, self.sidebar, self.input_widget,
-            self.bookmarks_panel, self.workflow_sidebar,
+            self.bookmarks_panel, self.workflow_sidebar, self.schedule_sidebar,
         ):
             if hasattr(widget, 'apply_theme'):
                 widget.apply_theme(theme)
-        if hasattr(self, 'canvas') and hasattr(self.canvas, 'apply_theme'):
-            self.canvas.apply_theme(theme)
+        for attr in ('canvas', 'terminal_widget'):
+            w = getattr(self, attr, None)
+            if w and hasattr(w, 'apply_theme'):
+                w.apply_theme(theme)
 
     def _setup_logo_animation(self):
         """Creates a pulsating glow effect for the Synapse Logo."""
@@ -2193,22 +2207,27 @@ class MainWindow(QMainWindow):
 
         # If it exists, either show diff or auto-apply
         if auto_apply:
-            self._edit_history.append((filepath, old_content))
-            filepath.write_text(code)
-            self.status_label.setText(f"Applied changes to {filename}. (Ctrl+Z to Rollback)")
-            self.workspace_panel.refresh()
-            self.editor_tabs.open_file(str(filepath))
-            self._start_indexing()
-        else:
-            dialog = DiffViewDialog(self, str(filename), old_content, code)
-            if dialog.exec_() == QDialog.Accepted and dialog.accepted_change:
-                # Backup for rollback
-                self._edit_history.append((filepath, old_content))
+            try:
                 filepath.write_text(code)
+                self._edit_history.append((filepath, old_content))
                 self.status_label.setText(f"Applied changes to {filename}. (Ctrl+Z to Rollback)")
                 self.workspace_panel.refresh()
                 self.editor_tabs.open_file(str(filepath))
                 self._start_indexing()
+            except OSError as e:
+                self.status_label.setText(f"Failed to write {filename}: {e}")
+        else:
+            dialog = DiffViewDialog(self, str(filename), old_content, code)
+            if dialog.exec_() == QDialog.Accepted and dialog.accepted_change:
+                try:
+                    filepath.write_text(code)
+                    self._edit_history.append((filepath, old_content))
+                    self.status_label.setText(f"Applied changes to {filename}. (Ctrl+Z to Rollback)")
+                    self.workspace_panel.refresh()
+                    self.editor_tabs.open_file(str(filepath))
+                    self._start_indexing()
+                except OSError as e:
+                    QMessageBox.warning(self, "Write Error", f"Failed to write {filename}: {e}")
 
     def _rollback_last_edit(self):
         if not self._edit_history:
@@ -2332,6 +2351,8 @@ class MainWindow(QMainWindow):
             return
         dlg = SystemPromptDialog(self.current_conv.get("system_prompt", ""), self)
         dlg.prompt_changed.connect(self._on_system_prompt_changed)
+        if hasattr(dlg, 'apply_theme'):
+            dlg.apply_theme(self._current_theme)
         dlg.exec_()
 
     def _on_system_prompt_changed(self, prompt):
@@ -2381,6 +2402,8 @@ class MainWindow(QMainWindow):
     def _open_settings(self):
         dlg = SettingsDialog(self.settings_data, self)
         dlg.settings_changed.connect(self._on_settings_changed)
+        if hasattr(dlg, 'apply_theme'):
+            dlg.apply_theme(self._current_theme)
         dlg.exec_()
 
     def _on_settings_changed(self, new_settings):
@@ -2710,6 +2733,15 @@ class MainWindow(QMainWindow):
         self._save_draft()
         if self._conn_checker:
             self._conn_checker.stop()
+        for worker_list in (
+            getattr(self, "_summary_workers", []),
+            getattr(self, "_tag_workers", []),
+            getattr(self, "_yt_workers", []),
+        ):
+            for w in worker_list:
+                if w.isRunning():
+                    w.quit()
+                    w.wait(2000)
         super().closeEvent(event)
 
     def _trigger_summarization(self):
@@ -3176,6 +3208,9 @@ class MainWindow(QMainWindow):
         self.status_label.setText("Auto-tagging...")
 
     def _on_auto_tag_done(self, text, stats):
+        sender = self.sender()
+        if sender in getattr(self, "_tag_workers", []):
+            self._tag_workers.remove(sender)
         tags = [t.strip().lower() for t in text.strip().split(",") if t.strip()]
         valid = {"coding", "writing", "research", "math", "data", "debugging", "learning", "creative", "general"}
         tags = [t for t in tags if t in valid][:2]
@@ -3208,6 +3243,8 @@ class MainWindow(QMainWindow):
         self._stream_timer.setInterval(max(10, speed_ms))
         self.settings_data["streaming_speed"] = speed_ms
         save_settings(self.settings_data)
+        speed_name = {10: "Instant", 30: "Fast", 50: "Normal", 100: "Slow", 200: "Typewriter"}.get(speed_ms, f"Custom ({speed_ms}ms)")
+        self.status_label.setText(f"Streaming: {speed_name}")
 
     # --- F21: Chat-to-Code Extractor ---
     def _extract_code(self):

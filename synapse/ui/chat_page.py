@@ -17,7 +17,7 @@ class ChatPage(QWebEnginePage):
             try:
                 if isinstance(data, str) and data.isdigit():
                     data = int(data)
-            except:
+            except (ValueError, TypeError):
                 pass
 
             self.action_requested.emit(action, data)

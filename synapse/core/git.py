@@ -75,14 +75,19 @@ def git_log(path, count=20):
 def git_commit(path, message, files=None):
     try:
         if files:
-            subprocess.run(["git", "add"] + files, cwd=str(path), timeout=10)
+            subprocess.run(["git", "add"] + files, cwd=str(path), timeout=10, check=True)
         else:
-            subprocess.run(["git", "add", "-A"], cwd=str(path), timeout=10)
+            subprocess.run(["git", "add", "-A"], cwd=str(path), timeout=10, check=True)
         result = subprocess.run(
             ["git", "commit", "-m", message],
             capture_output=True, text=True, cwd=str(path), timeout=30
         )
-        return result.stdout + result.stderr
+        output = result.stdout + result.stderr
+        if result.returncode != 0:
+            return f"Commit failed (exit {result.returncode}): {output}"
+        return output
+    except subprocess.CalledProcessError as e:
+        return f"Git error: {e.stderr or e.stdout or str(e)}"
     except Exception as e:
         return f"Error: {e}"
 

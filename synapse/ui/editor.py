@@ -291,40 +291,6 @@ class CodeEditor(QPlainTextEdit):
         cr = self.contentsRect()
         self.line_area.setGeometry(cr.left(), cr.top(), self.line_number_width(), cr.height())
 
-    def line_number_paint(self, event):
-        painter = QPainter(self.line_area)
-        painter.fillRect(event.rect(), QColor("#1e1e1e"))
-
-        block = self.firstVisibleBlock()
-        block_number = block.blockNumber()
-        top = int(self.blockBoundingGeometry(block).translated(self.contentOffset()).top())
-        bottom = top + int(self.blockBoundingRect(block).height())
-
-        current_block = self.textCursor().blockNumber()
-
-        while block.isValid() and top <= event.rect().bottom():
-            if block.isVisible() and bottom >= event.rect().top():
-                number = str(block_number + 1)
-                painter.setPen(QColor("#e6edf3") if block_number == current_block else QColor("#505050"))
-                painter.drawText(0, top, self.line_area.width() - 4,
-                                 self.fontMetrics().height(), Qt.AlignRight, number)
-            block = block.next()
-            top = bottom
-            bottom = top + int(self.blockBoundingRect(block).height())
-            block_number += 1
-        painter.end()
-
-    def _highlight_current_line(self):
-        selections = []
-        if not self.isReadOnly():
-            sel = QTextEdit.ExtraSelection()
-            sel.format.setBackground(QColor("#2a2d2e"))
-            sel.format.setProperty(QTextCharFormat.FullWidthSelection, True)
-            sel.cursor = self.textCursor()
-            sel.cursor.clearSelection()
-            selections.append(sel)
-        self.setExtraSelections(selections)
-
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Tab:
             self.textCursor().insertText("    ")
@@ -337,3 +303,59 @@ class CodeEditor(QPlainTextEdit):
                 cursor.insertText(text[4:])
             return
         super().keyPressEvent(event)
+
+    def apply_theme(self, theme):
+        bg = theme.get("bg", "#1a1b1e")
+        fg = theme.get("fg", "#e6edf3")
+        input_bg = theme.get("input_bg", "#0d1117")
+        border = theme.get("border", "#30363d")
+        accent = theme.get("accent", "#58a6ff")
+        sidebar_bg = theme.get("sidebar_bg", "#1e1f23")
+
+        self.setStyleSheet(
+            f"background: {input_bg}; color: {fg}; border: 1px solid {border};"
+        )
+        self._line_number_bg = QColor(sidebar_bg)
+        self._line_number_fg = QColor(fg)
+        self._line_number_dim = QColor(border)
+        self._current_line_bg = QColor(sidebar_bg)
+        self.viewport().update()
+        self.line_area.update()
+
+    def line_number_paint(self, event):
+        painter = QPainter(self.line_area)
+        bg_color = getattr(self, '_line_number_bg', QColor("#1e1e1e"))
+        fg_color = getattr(self, '_line_number_fg', QColor("#e6edf3"))
+        dim_color = getattr(self, '_line_number_dim', QColor("#505050"))
+        painter.fillRect(event.rect(), bg_color)
+
+        block = self.firstVisibleBlock()
+        block_number = block.blockNumber()
+        top = int(self.blockBoundingGeometry(block).translated(self.contentOffset()).top())
+        bottom = top + int(self.blockBoundingRect(block).height())
+
+        current_block = self.textCursor().blockNumber()
+
+        while block.isValid() and top <= event.rect().bottom():
+            if block.isVisible() and bottom >= event.rect().top():
+                number = str(block_number + 1)
+                painter.setPen(fg_color if block_number == current_block else dim_color)
+                painter.drawText(0, top, self.line_area.width() - 4,
+                                 self.fontMetrics().height(), Qt.AlignRight, number)
+            block = block.next()
+            top = bottom
+            bottom = top + int(self.blockBoundingRect(block).height())
+            block_number += 1
+        painter.end()
+
+    def _highlight_current_line(self):
+        selections = []
+        if not self.isReadOnly():
+            sel = QTextEdit.ExtraSelection()
+            hl_color = getattr(self, '_current_line_bg', QColor("#2a2d2e"))
+            sel.format.setBackground(hl_color)
+            sel.format.setProperty(QTextCharFormat.FullWidthSelection, True)
+            sel.cursor = self.textCursor()
+            sel.cursor.clearSelection()
+            selections.append(sel)
+        self.setExtraSelections(selections)

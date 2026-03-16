@@ -131,7 +131,8 @@ class VoiceManager(QObject):
             try:
                 self._stream.stop()
                 self._stream.close()
-            except: pass
+            except Exception:
+                pass
             self._stream = None
         
         self.recording_status.emit(False)
@@ -177,7 +178,7 @@ class VoiceManager(QObject):
             try:
                 self._playback_process.terminate()
                 self._playback_process = None
-            except:
+            except Exception:
                 pass
         self.playback_status.emit(False)
 

@@ -1,5 +1,7 @@
 import json
 import logging
+import os
+import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,8 +41,18 @@ class TaskScheduler(QObject):
 
     def _save_tasks(self):
         try:
-            with open(TASKS_FILE, "w") as f:
-                json.dump(self.tasks, f, indent=2)
+            TASKS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp_path = tempfile.mkstemp(dir=str(TASKS_FILE.parent), suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w") as f:
+                    json.dump(self.tasks, f, indent=2)
+                os.replace(tmp_path, str(TASKS_FILE))
+            except Exception:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
         except Exception as e:
             log.error(f"Failed to save tasks: {e}")
 
@@ -68,6 +80,8 @@ class TaskScheduler(QObject):
             if task["status"] == "pending":
                 try:
                     sched_time = datetime.fromisoformat(task["schedule_time"])
+                    if sched_time.tzinfo is None:
+                        sched_time = sched_time.replace(tzinfo=timezone.utc)
                     if sched_time <= now:
                         self._execute_task(task)
                 except Exception as e:

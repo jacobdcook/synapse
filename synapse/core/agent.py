@@ -202,7 +202,9 @@ class ToolExecutor(QObject):
             return None, "Error: No workspace open."
         full_path = (self.workspace_dir / path).resolve()
         ws_resolved = self.workspace_dir.resolve()
-        if not str(full_path).startswith(str(ws_resolved)):
+        try:
+            full_path.relative_to(ws_resolved)
+        except ValueError:
             return None, f"Error: Path '{path}' escapes workspace boundary."
         return full_path, None
 

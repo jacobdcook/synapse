@@ -145,3 +145,34 @@ class ImageGenSidebar(QWidget):
         for ext in ("*.png", "*.jpg", "*.jpeg", "*.webp"):
             for filepath in sorted(GEN_DIR.glob(ext), key=lambda p: p.stat().st_mtime, reverse=True):
                 self._add_image(str(filepath))
+
+    def apply_theme(self, theme):
+        bg = theme.get("bg", "#1a1b1e")
+        fg = theme.get("fg", "#e6edf3")
+        sidebar_bg = theme.get("sidebar_bg", "#1e1f23")
+        input_bg = theme.get("input_bg", "#0d1117")
+        border = theme.get("border", "#30363d")
+        accent = theme.get("accent", "#58a6ff")
+
+        for lbl in self.findChildren(QLabel):
+            if lbl.text() == "Image Generation":
+                lbl.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {fg};")
+
+        for frame in self.findChildren(QFrame):
+            if frame.parent() is self:
+                frame.setStyleSheet(f"background: {sidebar_bg}; border-radius: 8px; border: 1px solid {border};")
+
+        self.prompt_input.setStyleSheet(f"background: {input_bg}; border: 1px solid {border}; padding: 5px; color: {fg};")
+        self.neg_prompt_input.setStyleSheet(f"background: {input_bg}; border: 1px solid {border}; padding: 5px; color: {fg};")
+        self.scroll.setStyleSheet("background: transparent; border: none;")
+
+        self.gen_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {accent};
+                color: white;
+                font-weight: bold;
+                padding: 8px;
+                border-radius: 6px;
+            }}
+            QPushButton:hover {{ background-color: {accent}; }}
+        """)

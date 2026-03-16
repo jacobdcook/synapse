@@ -155,3 +155,16 @@ class TerminalWidget(QWidget):
                 self.input_line.clear()
         else:
             super().keyPressEvent(event)
+
+    def apply_theme(self, theme):
+        bg = theme.get("bg", "#1a1b1e")
+        input_bg = theme.get("input_bg", "#0d1117")
+        fg = theme.get("fg", "#e6edf3")
+        border = theme.get("border", "#30363d")
+        accent = theme.get("accent", "#58a6ff")
+        self.output.setStyleSheet(f"background: {input_bg}; color: {fg}; border: none; padding: 4px;")
+        self.input_line.setStyleSheet(
+            f"background: {input_bg}; color: {fg}; border: 1px solid {border}; border-radius: 4px; padding: 4px;"
+        )
+        self.cwd_label.setStyleSheet(f"color: {accent}; font-size: 11px; font-family: monospace;")
+        self.parentWidget()  # header styled via parent

@@ -95,3 +95,13 @@ class ScheduleSidebar(QWidget):
             text = f"[{status}] {sched} ({model})\n{prompt}"
             item = QListWidgetItem(text)
             self.list_widget.addItem(item)
+
+    def apply_theme(self, theme):
+        fg = theme.get("fg", "#ccc")
+        input_bg = theme.get("input_bg", "#0d1117")
+        border = theme.get("border", "#30363d")
+        accent = theme.get("accent", "#58a6ff")
+        self.prompt_input.setStyleSheet(f"background: {input_bg}; border: 1px solid {border}; color: {fg};")
+        self.model_combo.setStyleSheet(f"background: {input_bg}; border: 1px solid {border}; color: {fg};")
+        self.time_input.setStyleSheet(f"background: {input_bg}; color: {fg};")
+        self.list_widget.setStyleSheet(f"background: {input_bg}; border: none; color: {fg};")

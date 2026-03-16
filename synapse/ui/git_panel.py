@@ -143,3 +143,36 @@ class GitPanel(QWidget):
         self.diff_view.setPlainText(result)
         self.commit_input.clear()
         self.refresh()
+
+    def apply_theme(self, theme):
+        bg = theme.get("bg", "#1a1b1e")
+        fg = theme.get("fg", "#e6edf3")
+        sidebar_bg = theme.get("sidebar_bg", "#1e1f23")
+        header_bg = theme.get("header_bg", "#161b22")
+        accent = theme.get("accent", "#58a6ff")
+        input_bg = theme.get("input_bg", "#0d1117")
+        border = theme.get("border", "#30363d")
+        muted = "#8b949e"
+
+        for lbl in self.findChildren(QLabel):
+            text = lbl.text()
+            if text == "Source Control":
+                lbl.setStyleSheet(f"font-weight: bold; font-size: 13px; color: {fg}; padding: 4px;")
+            elif text in ("Commit Message:", "Recent Commits:"):
+                lbl.setStyleSheet(f"color: {muted}; font-size: 11px;")
+
+        self.branch_label.setStyleSheet(f"color: {muted}; font-size: 11px; padding: 2px 4px;")
+
+        self.status_tree.setStyleSheet(
+            f"QTreeWidget {{ background: {sidebar_bg}; border: 1px solid {border}; color: {fg}; }}"
+        )
+        self.diff_view.setStyleSheet(
+            f"background: {input_bg}; color: {fg}; border: 1px solid {border}; font-family: monospace; font-size: 11px;"
+        )
+        self.log_view.setStyleSheet(
+            f"background: {input_bg}; color: {fg}; border: 1px solid {border}; font-family: monospace; font-size: 11px;"
+        )
+        self.commit_input.setStyleSheet(
+            f"background: {header_bg}; color: {fg}; border: 1px solid {border}; "
+            f"border-radius: 4px; padding: 4px;"
+        )

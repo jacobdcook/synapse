@@ -15,6 +15,7 @@ class PluginManager:
         self.plugins = {}
         self.tools = {}
         self.slash_commands = {}
+        self.failed_plugins = []
         self.watcher = QFileSystemWatcher()
         self.watcher.directoryChanged.connect(self._on_dir_changed)
         if PLUGIN_DIR.exists():
@@ -44,11 +45,13 @@ class PluginManager:
                 log.info(f"Loaded plugin: {name}")
         except Exception as e:
             log.error(f"Failed to load plugin {name}: {e}")
+            self.failed_plugins.append({"name": name, "error": str(e)})
 
     def _on_dir_changed(self, path):
         self.plugins.clear()
         self.tools.clear()
         self.slash_commands.clear()
+        self.failed_plugins.clear()
         self.load_all()
         log.info("Plugins reloaded due to directory change")
 

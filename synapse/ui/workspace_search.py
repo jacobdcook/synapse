@@ -182,3 +182,24 @@ class WorkspaceSearchDialog(QDialog):
 
         self.count_label.setText(f"Replaced {replaced} occurrences in {len(affected_files)} files")
         self._do_search()
+
+    def apply_theme(self, theme):
+        bg = theme.get("bg", "#1a1b1e")
+        fg = theme.get("fg", "#e6edf3")
+        input_bg = theme.get("input_bg", "#0d1117")
+        border = theme.get("border", "#30363d")
+        accent = theme.get("accent", "#58a6ff")
+        muted = "#8b949e"
+
+        self.setStyleSheet(f"background: {bg};")
+        self.search_input.setStyleSheet(
+            f"background: {input_bg}; color: {fg}; border: 1px solid {border}; padding: 4px;"
+        )
+        self.replace_input.setStyleSheet(
+            f"background: {input_bg}; color: {fg}; border: 1px solid {border}; padding: 4px;"
+        )
+        self.count_label.setStyleSheet(f"color: {muted};")
+        self.results_tree.setStyleSheet(
+            f"QTreeWidget {{ background: {input_bg}; color: {fg}; border: 1px solid {border}; }}"
+            f"QTreeWidget::item:selected {{ background: {accent}; color: white; }}"
+        )

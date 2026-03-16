@@ -1,5 +1,7 @@
 import json
 import logging
+import os
+import tempfile
 import uuid
 import re
 from pathlib import Path
@@ -126,7 +128,7 @@ class WorkflowExecutor(QThread):
 
 class WorkflowManager:
     def __init__(self):
-        self.workflows_path = Path.home() / ".synapse" / "workflows.json"
+        self.workflows_path = Path.home() / ".local" / "share" / "synapse" / "workflows.json"
         self.workflows = self._load()
 
     def _load(self):
@@ -143,7 +145,17 @@ class WorkflowManager:
         try:
             self.workflows_path.parent.mkdir(parents=True, exist_ok=True)
             data = [w.to_dict() for w in self.workflows]
-            self.workflows_path.write_text(json.dumps(data, indent=2))
+            fd, tmp_path = tempfile.mkstemp(dir=str(self.workflows_path.parent), suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w") as f:
+                    json.dump(data, f, indent=2)
+                os.replace(tmp_path, str(self.workflows_path))
+            except Exception:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
         except Exception as e:
             log.error(f"Failed to save workflows: {e}")
 
