@@ -456,7 +456,19 @@ class MainWindow(QMainWindow):
         self.status_bar = self.statusBar()
         self.status_label = QLabel("Ready")
         self.status_bar.addPermanentWidget(self.status_label)
-        
+
+        self.tool_progress = QProgressBar()
+        self.tool_progress.setMaximumWidth(140)
+        self.tool_progress.setMaximumHeight(14)
+        self.tool_progress.setTextVisible(False)
+        self.tool_progress.setRange(0, 0)  # indeterminate
+        self.tool_progress.setStyleSheet("""
+            QProgressBar { background: #21262d; border-radius: 7px; border: 1px solid #30363d; }
+            QProgressBar::chunk { background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #58a6ff, stop:1 #bc8cff); border-radius: 7px; }
+        """)
+        self.tool_progress.hide()
+        self.status_bar.addPermanentWidget(self.tool_progress)
+
         self.conn_dot = QLabel("\u25CF") # Circle Icon
         self.conn_dot.setStyleSheet("color: #f85149; font-size: 14px; padding-right: 4px;")
         self.conn_dot.setToolTip("Ollama Disconnected")
@@ -1359,7 +1371,9 @@ class MainWindow(QMainWindow):
                 w.wait()
 
         tool_names = [tc["function"]["name"] for tc in tool_calls]
-        self.status_label.setText(f"Tool call: {', '.join(tool_names)}")
+        friendly = [n.replace("mcp__github__", "github/").replace("_", " ") for n in tool_names]
+        self.status_label.setText(f"Running: {', '.join(friendly)}")
+        self.tool_progress.show()
         QApplication.processEvents()
 
         results = []
@@ -1438,6 +1452,7 @@ class MainWindow(QMainWindow):
         
         conv = self._active_stream_conv or self.current_conv
         if not conv:
+            self.tool_progress.hide()
             return
 
         # Add tool result message to conversation
@@ -1452,7 +1467,8 @@ class MainWindow(QMainWindow):
                 "tool_results": results
             })
             
-            # Auto-continue with results
+            self.tool_progress.hide()
+            self.status_label.setText("Processing results...")
             self._send_message("", bypass_rag=True)
 
     def _on_token(self, token, pane_index=0):
@@ -1652,8 +1668,9 @@ class MainWindow(QMainWindow):
         self.context_label.setText(f"Context: ~{tokens}/{max_ctx} ({pct}%)")
         self.sum_action.setText(f"Summarize ({pct}% Context)")
 
-        # Auto-title after first assistant response
-        if len([m for m in conv["messages"] if m["role"] == "assistant"]) == 1 and conv.get("title") == "New Chat":
+        # Auto-title after first real assistant response (skip empty tool-call-only messages)
+        real_assistant = [m for m in conv["messages"] if m["role"] == "assistant" and m.get("content", "").strip()]
+        if len(real_assistant) == 1 and conv.get("title") == "New Chat":
             self._auto_title(conv)
 
         # Smart Auto-Tagging (F12) - Trigger after first assistant turn or every 5 user messages
@@ -1790,6 +1807,7 @@ class MainWindow(QMainWindow):
         self._set_summarize_running(False)
         self._active_stream_conv = None
         self._active_stream_tab_index = -1
+        self.tool_progress.hide()
         self.status_label.setText("API Error occurred")
         QMessageBox.critical(
             self,

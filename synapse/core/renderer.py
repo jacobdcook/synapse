@@ -234,13 +234,17 @@ class ChatRenderer:
                     f'</div>\n'
                 )
 
-        template = CHAT_HTML_TEMPLATE.replace("PYGMENTS_CSS", self.pygments_css)
+        template = self._apply_template_vars(CHAT_HTML_TEMPLATE)
+        return template.replace("MESSAGES_HTML", msgs_html)
+
+    def _apply_template_vars(self, template):
+        template = template.replace("PYGMENTS_CSS", self.pygments_css)
         template = template.replace("FONT_SIZE_VAL", str(self.font_size))
         template = template.replace("MERMAID_JS_URL", MERMAID_JS_URL)
         template = template.replace("KATEX_CSS_URL", KATEX_CSS_URL)
         template = template.replace("KATEX_JS_URL", KATEX_JS_URL)
         template = template.replace("KATEX_AUTO_RENDER_JS_URL", KATEX_AUTO_RENDER_JS_URL)
-        return template.replace("MESSAGES_HTML", msgs_html)
+        return template
 
     @staticmethod
     def _avatar(role):
@@ -367,8 +371,7 @@ class ChatRenderer:
         )
 
     def build_loading_html(self):
-        template = CHAT_HTML_TEMPLATE.replace("PYGMENTS_CSS", self.pygments_css)
-        template = template.replace("FONT_SIZE_VAL", str(self.font_size))
+        template = self._apply_template_vars(CHAT_HTML_TEMPLATE)
         skeleton = (
             '<div class="welcome" style="opacity:0.5">'
             '<div class="skeleton-line" style="width:60%;height:18px;margin:24px auto 12px;background:#333;border-radius:4px;animation:pulse 1.2s infinite"></div>'
