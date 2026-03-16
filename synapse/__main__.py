@@ -1,12 +1,14 @@
 import sys
 import logging
 from pathlib import Path
-from PyQt5.QtWidgets import QApplication
-from .ui.main import MainWindow
-from .utils.constants import APP_NAME, DARK_THEME_QSS
+from PyQt5.QtWidgets import QApplication, QMessageBox
+from .utils.constants import APP_NAME, CONFIG_DIR
 
-# Configure logging
-log_path = str(Path.home() / ".synapse.log")
+# Configure logging — use proper data directory
+LOG_DIR = CONFIG_DIR
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+log_path = str(LOG_DIR / "synapse.log")
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -20,14 +22,28 @@ log = logging.getLogger(__name__)
 def main():
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
-    app.setStyleSheet(DARK_THEME_QSS)
 
-    log.info("Starting Synapse modular version...")
-    window = MainWindow()
-    window.show()
-    log.info("Synapse ready")
+    try:
+        from .utils.constants import load_settings, get_theme_qss
+        settings = load_settings()
+        theme_name = settings.get("theme", "One Dark")
+        app.setStyleSheet(get_theme_qss(theme_name))
+    except Exception as e:
+        log.warning(f"Failed to load theme, using default: {e}")
+        from .utils.constants import DARK_THEME_QSS
+        app.setStyleSheet(DARK_THEME_QSS)
 
-    sys.exit(app.exec_())
+    try:
+        from .ui.main import MainWindow
+        log.info("Starting Synapse...")
+        window = MainWindow()
+        window.show()
+        log.info("Synapse ready")
+        sys.exit(app.exec_())
+    except Exception as e:
+        log.critical(f"Fatal error: {e}", exc_info=True)
+        QMessageBox.critical(None, "Synapse Error", f"Failed to start:\n\n{e}\n\nCheck {log_path} for details.")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

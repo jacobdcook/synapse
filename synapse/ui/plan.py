@@ -74,3 +74,13 @@ class PlanPanel(QWidget):
                 item.setCheckState(Qt.Unchecked)
             
             self.list_widget.addItem(item)
+
+    def apply_theme(self, theme):
+        fg = theme.get("fg", "#ccc")
+        border = theme.get("border", "#30363d")
+        sidebar_bg = theme.get("sidebar_bg", "#1e1e1e")
+        self.list_widget.setStyleSheet(f"""
+            QListWidget {{ background: transparent; border: none; outline: none; }}
+            QListWidget::item {{ padding: 8px; border-bottom: 1px solid {border}; color: {fg}; }}
+            QListWidget::item:selected {{ background: {sidebar_bg}; color: {fg}; }}
+        """)

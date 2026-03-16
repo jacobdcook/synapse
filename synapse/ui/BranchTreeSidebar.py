@@ -161,3 +161,8 @@ class BranchTreeSidebar(QWidget):
 
     def refresh(self, history, active_id):
         self.tree_widget.set_data(history, active_id)
+
+    def apply_theme(self, theme):
+        fg = theme.get("fg", "#ccc")
+        sidebar_bg = theme.get("sidebar_bg", "#1e1e1e")
+        self.scroll.setStyleSheet(f"background-color: {sidebar_bg};")

@@ -109,3 +109,17 @@ class KnowledgeSidebar(QWidget):
             item = QListWidgetItem(rel_path)
             item.setToolTip(rel_path)
             self.file_list.addItem(item)
+
+    def apply_theme(self, theme):
+        fg = theme.get("fg", "#ccc")
+        input_bg = theme.get("input_bg", "#0d1117")
+        border = theme.get("border", "#30363d")
+        sidebar_bg = theme.get("sidebar_bg", "#1e1e1e")
+        self.stats_card.setStyleSheet(f"background-color: {sidebar_bg}; border-radius: 4px; border: 1px solid {border};")
+        for lb in [self.file_count_lb, self.chunk_count_lb, self.vector_status_lb]:
+            lb.setStyleSheet(f"color: {fg}; font-size: 12px;")
+        self.file_list.setStyleSheet(f"""
+            QListWidget {{ background-color: {input_bg}; border: 1px solid {border}; border-radius: 4px; color: {fg}; font-size: 11px; }}
+            QListWidget::item {{ padding: 4px; }}
+            QListWidget::item:hover {{ background-color: {sidebar_bg}; }}
+        """)

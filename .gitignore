@@ -1,5 +1,13 @@
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
 .env
+.venv/
+venv/
 synapse/libs/
 app.py
+*.log
+GEMINI_PLAN_WAVE2.md

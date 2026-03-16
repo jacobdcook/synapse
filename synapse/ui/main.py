@@ -903,6 +903,7 @@ class MainWindow(QMainWindow):
         for widget in (
             self.activity_bar, self.sidebar, self.input_widget,
             self.bookmarks_panel, self.workflow_sidebar, self.schedule_sidebar,
+            self.knowledge_sidebar, self.plan_panel, self.branch_tree_sidebar,
         ):
             if hasattr(widget, 'apply_theme'):
                 widget.apply_theme(theme)

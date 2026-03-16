@@ -131,3 +131,12 @@ class CompareDialog(QDialog):
             if w.isRunning():
                 w.terminate()
         super().closeEvent(event)
+
+    def apply_theme(self, theme):
+        fg = theme.get("fg", "#e6edf3")
+        input_bg = theme.get("input_bg", "#0d1117")
+        border = theme.get("border", "#30363d")
+        accent = theme.get("accent", "#58a6ff")
+        for panel in self.panels:
+            panel["view"].setStyleSheet(f"background: {input_bg}; color: {fg}; border: 1px solid {border}; font-size: 13px;")
+            panel["status"].setStyleSheet(f"color: {border}; font-size: 11px;")
