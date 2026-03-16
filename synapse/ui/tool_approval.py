@@ -49,3 +49,16 @@ class ToolApprovalDialog(QDialog):
         buttons.addWidget(self.approve_btn)
         
         layout.addLayout(buttons)
+
+    def apply_theme(self, theme):
+        bg = theme.get("bg", "#1a1b1e")
+        fg = theme.get("fg", "#e6edf3")
+        input_bg = theme.get("input_bg", "#0d1117")
+        border = theme.get("border", "#30363d")
+        self.setStyleSheet(f"""
+            QDialog {{ background: {bg}; color: {fg}; }}
+            QTextEdit {{ background: {input_bg}; color: {fg}; border: 1px solid {border}; }}
+            QLabel {{ color: {fg}; }}
+            QPushButton {{ background: {border}; color: {fg}; border: none; padding: 6px 16px; border-radius: 4px; }}
+            QPushButton:hover {{ background: {input_bg}; }}
+        """)

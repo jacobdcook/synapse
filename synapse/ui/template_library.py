@@ -144,3 +144,17 @@ class TemplateLibrary(QWidget):
         content = self.template_content.toPlainText().strip()
         if content:
             self.template_applied.emit(content)
+
+    def apply_theme(self, theme):
+        fg = theme.get("fg", "#e6edf3")
+        input_bg = theme.get("input_bg", "#0d1117")
+        border = theme.get("border", "#30363d")
+        sidebar_bg = theme.get("sidebar_bg", "#1e1e1e")
+        self.preview_frame.setStyleSheet(f"background: {sidebar_bg}; border: 1px solid {border}; border-radius: 6px;")
+        self.template_name.setStyleSheet(f"background: {input_bg}; border: 1px solid {border}; color: {fg};")
+        self.template_content.setStyleSheet(f"background: {input_bg}; border: 1px solid {border}; color: {fg}; font-family: 'JetBrains Mono', monospace;")
+        self.list_widget.setStyleSheet(f"""
+            QListWidget {{ background: {input_bg}; border: 1px solid {border}; color: {fg}; }}
+            QListWidget::item {{ padding: 6px; }}
+            QListWidget::item:selected {{ background: {sidebar_bg}; }}
+        """)

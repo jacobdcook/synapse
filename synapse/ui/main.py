@@ -1252,6 +1252,7 @@ class MainWindow(QMainWindow):
                     log.error(f"Error preparing tool execution: {e}")
                     if not self.auto_exec_check.isChecked():
                         dialog = ToolApprovalDialog(self, name, args)
+                        if hasattr(dialog, 'apply_theme'): dialog.apply_theme(self._current_theme)
                         if dialog.exec_() == QDialog.Accepted:
                             approved = True
                     else:
@@ -1261,6 +1262,7 @@ class MainWindow(QMainWindow):
                     approved = True
                 else:
                     dialog = ToolApprovalDialog(self, name, args)
+                    if hasattr(dialog, 'apply_theme'): dialog.apply_theme(self._current_theme)
                     if dialog.exec_() == QDialog.Accepted:
                         approved = True
 
@@ -2398,6 +2400,7 @@ class MainWindow(QMainWindow):
                     last_user, self.current_conv["messages"], selected[:3],
                     self.current_conv.get("system_prompt", ""), gen_params, self
                 )
+                if hasattr(compare_dlg, 'apply_theme'): compare_dlg.apply_theme(self._current_theme)
                 compare_dlg.exec_()
 
     def _open_settings(self):

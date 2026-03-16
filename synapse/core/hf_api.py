@@ -31,7 +31,7 @@ class HuggingFaceAPI:
         url = f"{HuggingFaceAPI.BASE_URL}?{urllib.parse.urlencode(params)}"
         
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "Synapse/2.0"})
+            req = urllib.request.Request(url, headers={"User-Agent": "Synapse/3.0"})
             with urllib.request.urlopen(req, timeout=15) as resp:
                 data = json.loads(resp.read().decode())
                 return data
