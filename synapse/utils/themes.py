@@ -329,11 +329,14 @@ THEMES = {
 
 import os
 import json
+import logging
 from pathlib import Path
 
+log = logging.getLogger(__name__)
+
 def load_external_themes():
-    """Load additional themes from ~/.synapse/themes/"""
-    external_dir = Path.home() / ".synapse" / "themes"
+    """Load additional themes from user config directory."""
+    external_dir = Path.home() / ".local" / "share" / "synapse" / "themes"
     if not external_dir.exists():
         external_dir.mkdir(parents=True, exist_ok=True)
         return {}
@@ -346,7 +349,7 @@ def load_external_themes():
                 theme_name = theme_data.get("name", theme_file.stem)
                 themes[theme_name] = theme_data
         except Exception as e:
-            print(f"Failed to load theme {theme_file}: {e}")
+            log.warning(f"Failed to load theme {theme_file}: {e}")
             
     return themes
 
