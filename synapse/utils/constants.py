@@ -45,10 +45,26 @@ MODEL_PRICES = {
     "claude-3-opus-20240229": {"input": 15.0, "output": 75.0},
 }
 
+MERMAID_JS_URL = "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"
+
+KATEX_VERSION = "0.16.9"
+KATEX_CSS_URL = f"https://cdn.jsdelivr.net/npm/katex@{KATEX_VERSION}/dist/katex.min.css"
+KATEX_JS_URL = f"https://cdn.jsdelivr.net/npm/katex@{KATEX_VERSION}/dist/katex.min.js"
+KATEX_AUTO_RENDER_JS_URL = f"https://cdn.jsdelivr.net/npm/katex@{KATEX_VERSION}/dist/contrib/auto-render.min.js"
+
+DEFAULT_FOLDERS = ["General", "Work", "Research", "Archive"]
+TAG_COLORS = {
+    "urgent": "#e57373",   # Red
+    "todo": "#ffb74d",     # Orange
+    "idea": "#fff176",     # Yellow
+    "ref": "#81c784",      # Green
+    "personal": "#64b5f6", # Blue
+    "misc": "#ba68c8"      # Purple
+}
 # UI Defaults
 DEFAULT_MODEL = "huihui_ai/qwen3.5-abliterated:27b-Claude"
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
-DEFAULT_GEN_PARAMS = {"temperature": 0.7, "top_p": 0.9, "num_ctx": 4096}
+DEFAULT_GEN_PARAMS = {"temperature": 0.7, "top_p": 0.9, "num_ctx": 4096, "streaming_delay": 0.0}
 DEFAULT_SYSTEM_PROMPT = """You are Synapse, a powerful AI coding assistant.
 You have access to advanced tools and long-term memory.
 1. MEMORY: Use 'remember_fact' for persistent info and 'update_preference' for user style.
@@ -78,6 +94,9 @@ DEFAULT_SHORTCUTS = {
     "paste_image": "Ctrl+V",
     "toggle_terminal": "Ctrl+`",
     "search_replace": "Ctrl+Shift+H",
+    "screenshot": "Ctrl+Shift+S",
+    "zen_mode": "Ctrl+Shift+Z",
+    "global_summon": "<ctrl>+<alt>+s"
 }
 
 # Utility Functions
@@ -221,6 +240,13 @@ def _build_chat_template():
         '.br-btn:hover { color: var(--accent); }\n'
         '.br-info { font-weight: 600; min-width: 24px; text-align: center; }\n'
         '\n'
+        '.fb-btn {\n'
+        '  color: var(--fg3); background: transparent; border: none;\n'
+        '  cursor: pointer; padding: 2px 4px; border-radius: 4px; font-size: 14px;\n'
+        '  transition: color .12s, transform .12s;\n'
+        '}\n'
+        '.fb-btn:hover { color: var(--accent); transform: scale(1.1); }\n'
+        '.fb-btn.fb-active { color: var(--accent); }\n'
         '\n'
         '.msg-content {\n'
         '  font-size: FONT_SIZE_VALpx;\n'
@@ -534,8 +560,33 @@ def _build_chat_template():
         '  body.classList.toggle("open");\n'
         '  if (chev) chev.classList.toggle("open");\n'
         '}\n'
+        'mermaid.initialize({ startOnLoad: true, theme: "dark", securityLevel: "loose" });\n'
+        'renderMathInElement(document.body, {\n'
+        '  delimiters: [\n'
+        '    {left: "$$", right: "$$", display: true},\n'
+        '    {left: "$", right: "$", display: false},\n'
+        '    {left: "\\\\(", right: "\\\\)", display: false},\n'
+        '    {left: "\\\\[", right: "\\\\]", display: true}\n'
+        '  ], throwOnError: false\n'
+        '});\n'
         'window.scrollTo(0, document.body.scrollHeight);\n'
-        '</script>\n</body>\n</html>'
+        '/* Drag-and-drop message reordering */\n'
+        'document.querySelectorAll(".msg").forEach(function(el) {\n'
+        '  el.addEventListener("dragover", function(e) { e.preventDefault(); el.style.borderTop = "2px solid #58a6ff"; });\n'
+        '  el.addEventListener("dragleave", function(e) { el.style.borderTop = ""; });\n'
+        '  el.addEventListener("drop", function(e) {\n'
+        '    e.preventDefault(); el.style.borderTop = "";\n'
+        '    var fromIdx = e.dataTransfer.getData("text/plain");\n'
+        '    var toIdx = el.dataset.idx;\n'
+        '    if (fromIdx !== toIdx) window.location.href = "action://reorder/" + fromIdx + "/" + toIdx;\n'
+        '  });\n'
+        '});\n'
+        '</script>\n'
+        '<link rel="stylesheet" href="KATEX_CSS_URL">\n'
+        '<script src="KATEX_JS_URL"></script>\n'
+        '<script src="KATEX_AUTO_RENDER_JS_URL"></script>\n'
+        '<script src="MERMAID_JS_URL"></script>\n'
+        '</body>\n</html>'
     )
 
 CHAT_HTML_TEMPLATE = _build_chat_template()

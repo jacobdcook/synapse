@@ -4,14 +4,43 @@ import logging
 from pathlib import Path
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QPlainTextEdit,
-    QLabel, QSizePolicy, QFileDialog, QFrame, QApplication,
-    QListWidget, QListWidgetItem
+    QLineEdit, QLabel, QSizePolicy, QFileDialog, QFrame, QApplication,
+    QListWidget, QListWidgetItem, QScrollArea
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QByteArray, QBuffer, QIODevice, QRect
 from PyQt5.QtGui import QPixmap, QKeyEvent, QPainter, QColor, QBrush, QPen
 from ..utils.constants import IMAGE_EXTENSIONS, TEXT_EXTENSIONS
+from ..utils.variables import VariableResolver
 
 log = logging.getLogger(__name__)
+
+from PyQt5.QtWidgets import QDialog, QFormLayout, QDialogButtonBox
+
+class VariableDialog(QDialog):
+    """Dialog to fill in custom {{variables}} from the prompt."""
+    def __init__(self, variables, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Fill Variables")
+        self.setMinimumWidth(350)
+        
+        layout = QVBoxLayout(self)
+        self.form = QFormLayout()
+        self.inputs = {}
+        
+        for var in sorted(list(variables)):
+            edit = QLineEdit()
+            self.form.addRow(f"{var}:", edit)
+            self.inputs[var] = edit
+            
+        layout.addLayout(self.form)
+        
+        self.buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+        layout.addWidget(self.buttons)
+
+    def get_values(self):
+        return {var: edit.text() for var, edit in self.inputs.items()}
 
 
 class _FileCompleter(QListWidget):
@@ -296,6 +325,7 @@ class InputWidget(QWidget):
     search_toggled = pyqtSignal(bool)
     voice_toggled = pyqtSignal(bool)
     mic_triggered = pyqtSignal(bool) # True = start, False = stop
+    hands_free_toggled = pyqtSignal(bool)
     sync_toggled = pyqtSignal(bool)
     force_send_requested = pyqtSignal()  # stop current generation, send next queued
 
@@ -306,6 +336,7 @@ class InputWidget(QWidget):
         self._workspace_files = []
         self._streaming = False
         self._message_queue = []  # list of {"text": str, "images": list, "files": list}
+        self.resolver = VariableResolver()
 
         outer_layout = QVBoxLayout(self)
         outer_layout.setContentsMargins(12, 4, 12, 12)
@@ -390,6 +421,8 @@ class InputWidget(QWidget):
             "QPushButton:hover { background: #3d3d3d; }"
         )
         self.mic_btn.clicked.connect(self._on_mic_clicked)
+        self.mic_btn.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.mic_btn.customContextMenuRequested.connect(self._on_mic_context_menu)
         input_row.addWidget(self.mic_btn, alignment=Qt.AlignBottom)
 
         self.voice_btn = QPushButton("\ud83d\udd0a") # Speaker icon
@@ -463,8 +496,25 @@ class InputWidget(QWidget):
         text = self.text_edit.toPlainText().strip()
         images = [img[1] for img in self._attached_images]
         files = list(self._attached_files)
+        
         if not (text or images or files):
             return
+
+        # Handle Variables (F8)
+        all_vars = self.resolver.find_variables(text)
+        built_ins = set(self.resolver.get_built_in_vars().keys())
+        user_vars_needed = all_vars - built_ins
+        
+        user_vals = {}
+        if user_vars_needed:
+            dlg = VariableDialog(user_vars_needed, self)
+            if dlg.exec_() == QDialog.Accepted:
+                user_vals = dlg.get_values()
+            else:
+                return # User cancelled
+
+        text = self.resolver.resolve_all(text, user_vals)
+
         if self._streaming:
             self._message_queue.append({"text": text, "images": images, "files": files})
             self.text_edit.clear()
@@ -521,11 +571,12 @@ class InputWidget(QWidget):
             self._queue_display.update_queue(self._message_queue)
 
     def _on_mic_clicked(self, checked):
+        if not hasattr(self, "_hands_free"): self._hands_free = False
         if checked:
             self.visualizer.show()
             self.mic_btn.setToolTip("Stop Recording")
             self.mic_btn.setStyleSheet(
-                "QPushButton { background: #c0392b; color: white; border: none; border-radius: 6px; font-size: 18px; }"
+                f"QPushButton {{ background: {'#264f78' if self._hands_free else '#c0392b'}; color: white; border: none; border-radius: 6px; font-size: 18px; }}"
             )
             self.text_edit.setPlaceholderText("Recording... Click mic again to stop.")
         else:
@@ -537,6 +588,26 @@ class InputWidget(QWidget):
             )
             self.text_edit.setPlaceholderText("Type a message... (Enter to send, Shift+Enter for new line, @ to mention file)")
         self.mic_triggered.emit(checked)
+
+    def _on_mic_context_menu(self, pos):
+        from PyQt5.QtWidgets import QMenu, QAction
+        menu = QMenu(self)
+        hands_free_act = QAction("Hands-free Mode", self, checkable=True)
+        # Use a local attribute to track hands-free state if not already in MainWindow
+        if not hasattr(self, "_hands_free"): self._hands_free = False
+        hands_free_act.setChecked(self._hands_free)
+        
+        def toggle(checked):
+            self._hands_free = checked
+            self.hands_free_toggled.emit(checked)
+            if checked:
+                self.mic_btn.setToolTip("Hands-free Mode (Active)")
+            else:
+                self.mic_btn.setToolTip("Voice Input (Record)")
+
+        hands_free_act.toggled.connect(toggle)
+        menu.addAction(hands_free_act)
+        menu.exec_(self.mic_btn.mapToGlobal(pos))
 
     def append_text(self, text):
         self.text_edit.appendPlainText(text)
@@ -571,6 +642,17 @@ class InputWidget(QWidget):
             self._update_preview()
         except (OSError, IOError):
             pass
+
+    def add_image_pixmap(self, pixmap, filename="screenshot.png"):
+        if pixmap.isNull():
+            return
+        ba = QByteArray()
+        buf = QBuffer(ba)
+        buf.open(QIODevice.WriteOnly)
+        pixmap.save(buf, "PNG")
+        b64 = base64.b64encode(ba.data()).decode()
+        self._attached_images.append((filename, b64))
+        self._update_preview()
 
     def paste_image_from_clipboard(self):
         clipboard = QApplication.clipboard()

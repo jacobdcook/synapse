@@ -259,11 +259,6 @@ THEMES = {
                 background: #484f58;
             }
             
-            QProgressBar {
-                background-color: #21262d;
-                border-radius: 2px;
-                text-align: center;
-            }
             QProgressBar::chunk {
                 background-color: #238636;
                 border-radius: 2px;
@@ -271,3 +266,32 @@ THEMES = {
         """
     }
 }
+
+import os
+import json
+from pathlib import Path
+
+def load_external_themes():
+    """Load additional themes from ~/.synapse/themes/"""
+    external_dir = Path.home() / ".synapse" / "themes"
+    if not external_dir.exists():
+        external_dir.mkdir(parents=True, exist_ok=True)
+        return {}
+        
+    themes = {}
+    for theme_file in external_dir.glob("*.json"):
+        try:
+            with open(theme_file, "r") as f:
+                theme_data = json.load(f)
+                theme_name = theme_data.get("name", theme_file.stem)
+                themes[theme_name] = theme_data
+        except Exception as e:
+            print(f"Failed to load theme {theme_file}: {e}")
+            
+    return themes
+
+def get_all_themes():
+    """Combines built-in themes with external ones."""
+    all_themes = THEMES.copy()
+    all_themes.update(load_external_themes())
+    return all_themes

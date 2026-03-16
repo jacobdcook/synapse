@@ -6,9 +6,19 @@ try:
     import numpy as np
 except ImportError:
     np = None
+try:
+    import pypdf
+except ImportError:
+    pypdf = None
+try:
+    import docx
+except ImportError:
+    docx = None
+
 from pathlib import Path
 from PyQt5.QtCore import QThread, pyqtSignal
 from .api import get_embeddings
+from ..utils.constants import CONFIG_DIR
 
 log = logging.getLogger(__name__)
 
@@ -27,6 +37,54 @@ def chunk_text(text, chunk_size=1500, overlap=200):
         if end >= len(text):
             break
     return chunks
+
+def extract_text_from_pdf(file_path):
+    """Extract text from a PDF file."""
+    if pypdf is None:
+        log.error("pypdf is not installed")
+        return ""
+    try:
+        text = ""
+        with open(file_path, 'rb') as f:
+            reader = pypdf.PdfReader(f)
+            for page in reader.pages:
+                text += (page.extract_text() or "") + "\n"
+        return text
+    except Exception as e:
+        log.error(f"Error extracting PDF text: {e}")
+        return ""
+
+def extract_text_from_docx(file_path):
+    """Extract text from a DOCX file."""
+    if docx is None:
+        log.error("python-docx is not installed")
+        return ""
+    try:
+        doc = docx.Document(file_path)
+        return "\n".join([para.text for para in doc.paragraphs])
+    except Exception as e:
+        log.error(f"Error extracting DOCX text: {e}")
+        return ""
+
+def load_index():
+    """Load the persistent vector index from disk."""
+    index_path = CONFIG_DIR / "vector_index.json"
+    if index_path.exists():
+        try:
+            with open(index_path, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            log.error(f"Failed to load index: {e}")
+    return {}
+
+def save_index(index):
+    """Save the vector index to disk."""
+    index_path = CONFIG_DIR / "vector_index.json"
+    try:
+        with open(index_path, 'w') as f:
+            json.dump(index, f)
+    except Exception as e:
+        log.error(f"Failed to save index: {e}")
 
 def cosine_similarity(v1, v2):
     """Calculate cosine similarity between two vectors."""
@@ -80,9 +138,22 @@ class WorkspaceIndexer(QThread):
             if self._stop_flag: break
             
             try:
-                # Only index text files
-                content = file_path.read_text(errors='replace')
+                # Handle different file types
+                ext = file_path.suffix.lower()
                 rel_path = str(file_path.relative_to(self.workspace_dir))
+                
+                content = ""
+                if ext in ['.txt', '.md', '.py', '.js', '.html', '.css', '.json', '.sh', '.yml', '.yaml']:
+                    content = file_path.read_text(errors='replace')
+                elif ext == '.pdf':
+                    content = extract_text_from_pdf(file_path)
+                elif ext == '.docx':
+                    content = extract_text_from_docx(file_path)
+                else:
+                    continue # Skip unsupported binary files
+                
+                if not content.strip():
+                    continue
                 
                 # Chunk the content
                 chunks = chunk_text(content)

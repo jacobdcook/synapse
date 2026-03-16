@@ -35,7 +35,7 @@ class ImageGenSidebar(QWidget):
         provider_layout = QHBoxLayout()
         provider_layout.addWidget(QLabel("Backend:"))
         self.provider_combo = QComboBox()
-        self.provider_combo.addItems(["Stable Diffusion", "ComfyUI"])
+        self.provider_combo.addItems(["Stable Diffusion", "ComfyUI", "OpenAI DALL-E 3"])
         provider_layout.addWidget(self.provider_combo)
         settings_layout.addLayout(provider_layout)
 
@@ -102,7 +102,8 @@ class ImageGenSidebar(QWidget):
         layout.addWidget(self.scroll, 1)
 
     def _on_gen_clicked(self):
-        provider = "sd" if self.provider_combo.currentIndex() == 0 else "comfy"
+        providers = ["sd", "comfy", "openai"]
+        provider = providers[self.provider_combo.currentIndex()]
         params = {
             "prompt": self.prompt_input.text(),
             "negative_prompt": self.neg_prompt_input.text(),

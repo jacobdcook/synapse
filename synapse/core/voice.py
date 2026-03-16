@@ -31,10 +31,15 @@ class VoiceManager(QObject):
         self.model_size = model_size
         self.whisper_model = None
         self._recording = False
+        self.hands_free = False
+        self.vad_threshold = 0.01
+        self.silence_timeout = 1.5
         self._audio_data = []
         self._sample_rate = 16000
         self._stream = None
         self._playback_process = None
+        self._silence_start = None
+        self.tts_voice = "en-US-AndrewNeural"
 
     def _ensure_whisper(self):
         if self.whisper_model is None:
@@ -53,13 +58,15 @@ class VoiceManager(QObject):
                 return False
         return True
 
-    def start_recording(self):
+    def start_recording(self, hands_free=False):
         if self._recording:
             return
         
         try:
             self._recording = True
+            self.hands_free = hands_free
             self._audio_data = []
+            self._silence_start = None
             
             def callback(indata, frames, time, status):
                 if status:
@@ -72,23 +79,52 @@ class VoiceManager(QObject):
                     level = min(1.0, rms * 5.0) 
                     self.mic_level.emit(level)
 
+                    if self.hands_free:
+                        if rms < self.vad_threshold:
+                            if self._silence_start is None:
+                                self._silence_start = time.inputBufferAdcTime
+                            elif time.inputBufferAdcTime - self._silence_start > self.silence_timeout:
+                                # Silence threshold met, trigger stop in a safe way
+                                # We can't call stop_recording directly if it closes the stream from here
+                                # Instead, we flag it.
+                                self._recording = False
+                        else:
+                            self._silence_start = None
+
             self._stream = sd.InputStream(samplerate=self._sample_rate, channels=1, callback=callback)
             self._stream.start()
             self.recording_status.emit(True)
-            log.info("Recording started")
+            log.info(f"Recording started (hands_free={hands_free})")
+            
+            if self.hands_free:
+                # Poll to check if _recording was set to False by callback
+                QTimer.singleShot(100, self._check_hands_free_stop)
+                
         except Exception as e:
             self._recording = False
             log.error(f"Failed to start recording: {e}")
             self.error_occurred.emit(f"Mic Error: {e}")
 
-    def stop_recording(self):
+    def _check_hands_free_stop(self):
         if not self._recording:
+            self.stop_recording()
+        elif self.hands_free:
+            QTimer.singleShot(100, self._check_hands_free_stop)
+
+    def stop_recording(self):
+        # Allow being called even if _recording is False (to finish up)
+        if not self._stream:
             return
         
+        was_recording = self._recording
         self._recording = False
+        
         if self._stream:
-            self._stream.stop()
-            self._stream.close()
+            try:
+                self._stream.stop()
+                self._stream.close()
+            except: pass
+            self._stream = None
         
         self.recording_status.emit(False)
         log.info("Recording stopped")

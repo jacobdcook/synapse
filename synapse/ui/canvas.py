@@ -1,6 +1,12 @@
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFrame
-from PyQt5.QtWebEngineWidgets import QWebEngineView
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEngineSettings
+from PyQt5.QtCore import Qt, pyqtSignal, QUrl
+import logging
+import tempfile
+import webbrowser
+import os
+
+log = logging.getLogger(__name__)
 
 class CanvasWidget(QWidget):
     """
@@ -13,6 +19,7 @@ class CanvasWidget(QWidget):
         super().__init__(parent)
         self._setup_ui()
         self._last_content = ""
+        self._last_type = "html"
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -24,16 +31,25 @@ class CanvasWidget(QWidget):
         self.header.setFixedHeight(35)
         self.header.setStyleSheet("background-color: #2d2d2d; border-bottom: 1px solid #3e3e3e;")
         header_layout = QHBoxLayout(self.header)
-        header_layout.setContentsMargins(10, 0, 10, 0)
+        header_layout.setContentsMargins(12, 0, 8, 0)
 
         self.title_label = QLabel("Canvas Preview")
-        self.title_label.setStyleSheet("font-weight: bold; color: #cccccc;")
+        self.title_label.setStyleSheet("font-weight: bold; color: #cccccc; font-size: 12px;")
         header_layout.addWidget(self.title_label)
+        
         header_layout.addStretch()
 
-        self.refresh_btn = QPushButton("Refresh")
-        self.refresh_btn.setFixedWidth(70)
-        self.refresh_btn.setStyleSheet("background: #3e3e3e; border: none; border-radius: 4px; color: #fff; padding: 2px;")
+        self.browser_btn = QPushButton("\ud83c\udf10") # Globe
+        self.browser_btn.setToolTip("Open in Browser")
+        self.browser_btn.setFixedSize(26, 26)
+        self.browser_btn.setStyleSheet("QPushButton { background: transparent; border: none; font-size: 13px; } QPushButton:hover { background: #3c3c3c; }")
+        self.browser_btn.clicked.connect(self._open_in_browser)
+        header_layout.addWidget(self.browser_btn)
+
+        self.refresh_btn = QPushButton("\u21bb") # Refresh
+        self.refresh_btn.setToolTip("Refresh")
+        self.refresh_btn.setFixedSize(26, 26)
+        self.refresh_btn.setStyleSheet("QPushButton { background: transparent; border: none; font-size: 13px; } QPushButton:hover { background: #3c3c3c; }")
         self.refresh_btn.clicked.connect(self.refresh)
         header_layout.addWidget(self.refresh_btn)
 
@@ -41,43 +57,54 @@ class CanvasWidget(QWidget):
 
         # Web View
         self.view = QWebEngineView()
-        self.view.setStyleSheet("background: #ffffff;") # Clear background for previews
+        self.view.settings().setAttribute(QWebEngineSettings.LocalContentCanAccessRemoteUrls, True)
+        self.view.settings().setAttribute(QWebEngineSettings.JavascriptEnabled, True)
+        self.view.setStyleSheet("background: #ffffff;") 
         layout.addWidget(self.view)
 
-    def set_content(self, html, title="Canvas Preview"):
-        self._last_content = html
+    def set_content(self, content, title="Canvas Preview", content_type="html"):
+        self._last_content = content
+        self._last_type = content_type
         self.title_label.setText(title)
         
-        # Ensure it has a base structure if it's just a fragment
-        if "<html" not in html.lower():
-            # Wrap in a standard container with some nice defaults (Inter font, etc)
-            full_html = f"""
-            <!DOCTYPE html>
+        if content_type.lower() == 'svg':
+            html = f"<html><body style='background:#f0f0f0; display:flex; justify-content:center; align-items:center; height:100vh; margin:0;'>{content}</body></html>"
+            self.view.setHtml(html)
+        elif content_type.lower() == 'mermaid':
+            html = f"""
             <html>
             <head>
-                <meta charset="utf-8">
-                <style>
-                    body {{
-                        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-                        margin: 20px;
-                        background-color: white;
-                        color: black;
-                    }}
-                </style>
+                <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+                <style>body {{ background: #1e1e1e; color: white; display: flex; justify-content: center; padding: 20px; }}</style>
             </head>
             <body>
-                {html}
+                <div class="mermaid">{content}</div>
+                <script>mermaid.initialize({{ startOnLoad: true, theme: 'dark' }});</script>
             </body>
             </html>
             """
-            self.view.setHtml(full_html)
-        else:
             self.view.setHtml(html)
+        else:
+            # Assume HTML
+            if "<html" not in content.lower() and "<body" not in content.lower():
+                full_html = f"<!DOCTYPE html><html><body style='font-family:sans-serif; margin:20px;'>{content}</body></html>"
+                self.view.setHtml(full_html)
+            else:
+                self.view.setHtml(content)
 
     def refresh(self):
         if self._last_content:
-            self.set_content(self._last_content, self.title_label.text())
+            self.set_content(self._last_content, self.title_label.text(), self._last_type)
+
+    def _open_in_browser(self):
+        if not self._last_content: return
+        suffix = ".html"
+        if self._last_type == 'svg': suffix = ".svg"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as f:
+            f.write(self._last_content.encode('utf-8'))
+            temp_path = f.name
+        webbrowser.open(f"file://{os.path.abspath(temp_path)}")
 
     def clear(self):
         self._last_content = ""
-        self.view.setHtml("<html><body><p style='color:#888; text-align:center; margin-top:100px;'>No preview active</p></body></html>")
+        self.view.setHtml("<html><body style='background:#1e1e1e; color:#888; display:flex; justify-content:center; align-items:center; height:100vh;'>No preview active</body></html>")

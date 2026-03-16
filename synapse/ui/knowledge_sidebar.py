@@ -1,6 +1,6 @@
 import logging
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QPushButton, QLabel, QFrame
+    QWidget, QVBoxLayout, QPushButton, QLabel, QFrame, QListWidget, QListWidgetItem
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 
@@ -40,6 +40,29 @@ class KnowledgeSidebar(QWidget):
         
         layout.addWidget(self.stats_card)
 
+        # File List Section
+        file_list_label = QLabel("INDEXED FILES")
+        file_list_label.setStyleSheet("font-weight: bold; color: #858585; font-size: 10px; margin-top: 10px;")
+        layout.addWidget(file_list_label)
+
+        self.file_list = QListWidget()
+        self.file_list.setStyleSheet("""
+            QListWidget {
+                background-color: #1e1e1e;
+                border: 1px solid #333333;
+                border-radius: 4px;
+                color: #bbbbbb;
+                font-size: 11px;
+            }
+            QListWidget::item {
+                padding: 4px;
+            }
+            QListWidget::item:hover {
+                background-color: #2d2d2d;
+            }
+        """)
+        layout.addWidget(self.file_list)
+
         # Actions
         self.reindex_btn = QPushButton("\u21bb Re-index Workspace")
         self.reindex_btn.setStyleSheet("""
@@ -69,6 +92,7 @@ class KnowledgeSidebar(QWidget):
         layout.addWidget(help_text)
 
     def update_stats(self, index):
+        self.file_list.clear()
         if not index:
             self.file_count_lb.setText("Files Indexed: 0")
             self.chunk_count_lb.setText("Total Chunks: 0")
@@ -79,3 +103,9 @@ class KnowledgeSidebar(QWidget):
         
         self.file_count_lb.setText(f"Files Indexed: {file_count}")
         self.chunk_count_lb.setText(f"Total Chunks: {chunk_count}")
+
+        # Populate file list
+        for rel_path in sorted(index.keys()):
+            item = QListWidgetItem(rel_path)
+            item.setToolTip(rel_path)
+            self.file_list.addItem(item)

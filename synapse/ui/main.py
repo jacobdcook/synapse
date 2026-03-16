@@ -13,7 +13,7 @@ from typing import Optional, Any, Tuple
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QSplitter, QStackedWidget, QComboBox, QLabel, QProgressBar,
-    QMessageBox, QFileDialog, QInputDialog, QPlainTextEdit, QShortcut,
+    QMessageBox, QFileDialog, QInputDialog, QPlainTextEdit, QTextEdit, QShortcut,
     QSystemTrayIcon, QMenu, QAction, QDialog, QTabWidget, QPushButton,
     QGraphicsDropShadowEffect, QStatusBar
 )
@@ -29,7 +29,7 @@ from ..utils.constants import (
     relative_time, estimate_tokens
 )
 from ..core.api import (
-    WorkerFactory, ModelLoader, TitleWorker, unload_model, unload_all_models, ConnectionChecker,
+    WorkerFactory, ModelLoader, TitleWorker, SummaryWorker, YouTubeWorker, unload_model, unload_all_models, ConnectionChecker,
     BaseAIWorker
 )
 from ..core.renderer import ChatRenderer
@@ -41,13 +41,14 @@ from .input import InputWidget
 from .workspace import WorkspacePanel, EditorTabs
 from .canvas import CanvasWidget
 from .activity_bar import ActivityBar
-from .diff_view import DiffViewDialog
-from ..core.indexer import WorkspaceIndexer, search_index
+from ..core.indexer import WorkspaceIndexer, search_index, load_index, save_index, extract_text_from_pdf, extract_text_from_docx
+from ..core.code_executor import CodeExecutor
 from ..core.agent import ToolExecutor
 from .tool_approval import ToolApprovalDialog
 from .model_manager import ModelManagerPanel
 from .system_prompt import SystemPromptDialog
 from .command_palette import CommandPalette
+from .screenshot import ScreenCaptureWidget
 from .settings_dialog import SettingsDialog
 from .compare_dialog import CompareDialog
 from ..core.plugins import PluginManager
@@ -59,6 +60,7 @@ from .workspace_search import WorkspaceSearchDialog
 from .knowledge_sidebar import KnowledgeSidebar
 from .plan import PlanPanel
 from ..utils.themes import THEMES
+from ..utils.hotkey_manager import GlobalHotkeyManager
 from ..core.voice import VoiceManager
 from .onboarding import OnboardingWizard
 from .template_library import TemplateLibrary
@@ -69,6 +71,13 @@ from .ScheduleSidebar import ScheduleSidebar
 from ..core.scheduler import scheduler
 from .ImageGenSidebar import ImageGenSidebar
 from ..core.image_gen import ImageGenerator
+from .workflow_sidebar import WorkflowSidebar
+from .bookmarks_panel import BookmarksPanel
+from .table_editor import TableEditorDialog
+from .quick_chat import QuickChatWidget
+from .playground import PlaygroundPanel
+from .arena_dialog import ArenaDialog
+from .prompt_lab import PromptLab
 
 log = logging.getLogger(__name__)
 
@@ -101,7 +110,12 @@ class MainWindow(QMainWindow):
         self.current_conv = None
         self.worker = None
         self.indexer = None
-        self.workspace_index = {}
+        self.workspace_index = load_index()
+        self.code_executor = CodeExecutor()
+        
+        # Restore index stats to sidebar if loaded
+        if self.workspace_index:
+            QTimer.singleShot(500, lambda: self.knowledge_sidebar.update_stats(self.workspace_index))
         self.tool_executor = ToolExecutor()
         self.voice_manager = VoiceManager()
         self.voice_manager.transcription_result.connect(self._on_transcription_received)
@@ -122,9 +136,12 @@ class MainWindow(QMainWindow):
         self._last_requested_model = None
         self._recursion_depth = 0
         self._max_recursion = 10
+        self._auto_continue_count = 0
         self._shortcut_objects = []
-
-        self._tray_icon = None
+        self._consensus_active = False
+        self._consensus_responses = {}
+        self._zen_mode = False
+        
         unload_all_models()
         self._setup_ui()
         
@@ -134,6 +151,8 @@ class MainWindow(QMainWindow):
         self._setup_timers()
         self._setup_conn_checker()
         self._setup_shortcuts()
+        self._clipboard = QApplication.clipboard()
+        self._clipboard.dataChanged.connect(self._on_clipboard_changed)
         self._load_models()
         self._restore_geometry()
         self._restore_workspace()
@@ -144,6 +163,7 @@ class MainWindow(QMainWindow):
         self._on_theme_changed(theme_name)
         self.sidebar.refresh()
         self._restore_draft()
+        self._setup_global_hotkey()
 
         # Phase 1: Onboarding check
         if not self.settings_data.get("onboarding_complete"):
@@ -218,6 +238,10 @@ class MainWindow(QMainWindow):
         self.image_gen_sidebar.generation_requested.connect(self._on_image_gen_requested)
         self.image_gen_sidebar.image_selected.connect(self._on_image_selected)
         
+        self.workflow_sidebar = WorkflowSidebar()
+        self.bookmarks_panel = BookmarksPanel()
+        self.bookmarks_panel.bookmark_selected.connect(self._on_bookmark_selected)
+
         # Add knowledge_sidebar, template_library, and analytics_sidebar directly to sidebar_layout
         # and manage their visibility manually, instead of using sidebar_stack
         sidebar_layout.addWidget(self.sidebar_stack)
@@ -227,6 +251,8 @@ class MainWindow(QMainWindow):
         sidebar_layout.addWidget(self.branch_tree_sidebar)
         sidebar_layout.addWidget(self.schedule_sidebar)
         sidebar_layout.addWidget(self.image_gen_sidebar)
+        sidebar_layout.addWidget(self.workflow_sidebar)
+        sidebar_layout.addWidget(self.bookmarks_panel)
         
         self.knowledge_sidebar.hide()
         self.template_library.hide()
@@ -234,6 +260,8 @@ class MainWindow(QMainWindow):
         self.branch_tree_sidebar.hide()
         self.schedule_sidebar.hide()
         self.image_gen_sidebar.hide()
+        self.workflow_sidebar.hide()
+        self.bookmarks_panel.hide()
 
         self.sidebar_stack.setCurrentIndex(1) # Start with Chat sidebar
 
@@ -269,6 +297,7 @@ class MainWindow(QMainWindow):
         self.input_widget.search_toggled.connect(self._on_search_toggled)
         self.input_widget.sync_toggled.connect(self._on_sync_toggled)
         self.input_widget.mic_triggered.connect(self._on_mic_triggered)
+        self.input_widget.hands_free_toggled.connect(self._on_hands_free_toggled)
         self.input_widget.stop_btn.clicked.connect(self._stop_generation)
         self.input_widget.force_send_requested.connect(self._force_send_next)
         self.editor_layout.addWidget(self.input_widget)
@@ -346,6 +375,29 @@ class MainWindow(QMainWindow):
             action.triggered.connect(lambda checked, n=tname: self._on_theme_changed(n))
         theme_btn.setMenu(theme_menu)
         self.toolbar.addWidget(theme_btn)
+
+        self.toolbar.addSeparator()
+
+        export_btn = QPushButton("Export Chat")
+        export_menu = QMenu(self)
+        export_menu.addAction("Markdown (.md)", lambda: self._export_current("md"))
+        export_menu.addAction("HTML (.html)", lambda: self._export_current("html"))
+        export_menu.addAction("JSON (.json)", lambda: self._export_current("json"))
+        export_menu.addAction("PDF (.pdf)", lambda: self._export_current("pdf"))
+        export_btn.setMenu(export_menu)
+        self.toolbar.addWidget(export_btn)
+
+        self.toolbar.addSeparator()
+
+        stats_btn = QPushButton("\U0001f4ca Stats") # Chart icon
+        stats_btn.clicked.connect(self._show_stats)
+        self.toolbar.addWidget(stats_btn)
+
+        self.toolbar.addSeparator()
+
+        table_btn = QPushButton("\U0001f5d2 Table") # Table icon
+        table_btn.clicked.connect(self._open_table_editor)
+        self.toolbar.addWidget(table_btn)
 
         # Status Bar
         self.status_bar = self.statusBar()
@@ -426,6 +478,9 @@ class MainWindow(QMainWindow):
             tray_menu = QMenu()
             show_action = tray_menu.addAction("Show")
             show_action.triggered.connect(self.showNormal)
+            quick_chat_action = tray_menu.addAction("Quick Chat")
+            quick_chat_action.triggered.connect(self._open_quick_chat)
+            tray_menu.addSeparator()
             quit_action = tray_menu.addAction("Quit")
             quit_action.triggered.connect(QApplication.quit)
             self._tray_icon.setContextMenu(tray_menu)
@@ -434,7 +489,8 @@ class MainWindow(QMainWindow):
 
     def _setup_timers(self):
         self._stream_timer = QTimer()
-        self._stream_timer.setInterval(50)
+        self._streaming_delay = self.settings_data.get("streaming_speed", 50)
+        self._stream_timer.setInterval(max(10, self._streaming_delay))
         self._stream_timer.timeout.connect(self._update_streaming_display)
 
         self._draft_timer = QTimer()
@@ -475,6 +531,8 @@ class MainWindow(QMainWindow):
             "paste_image": lambda: self.input_widget.paste_image_from_clipboard(),
             "toggle_terminal": self._toggle_terminal,
             "search_replace": self._workspace_search_replace,
+            "screenshot": self._on_screenshot_triggered,
+            "zen_mode": self._toggle_zen_mode,
         }
 
         for action_id, key in bindings.items():
@@ -499,6 +557,7 @@ class MainWindow(QMainWindow):
         self.model_combo.addItems(models)
         self.model_combo.setCurrentIndex(0)
         self.model_combo.blockSignals(False)
+        self.split_view.set_available_models(models)
 
         if self.current_conv:
             self.current_conv["model"] = self.model_combo.currentText() or DEFAULT_MODEL
@@ -517,7 +576,8 @@ class MainWindow(QMainWindow):
     def _on_activity_changed(self, index):
         # Hide all custom sidebars first
         for w in (self.knowledge_sidebar, self.template_library, self.analytics_sidebar,
-                  self.branch_tree_sidebar, self.schedule_sidebar, self.image_gen_sidebar):
+                  self.branch_tree_sidebar, self.schedule_sidebar, self.image_gen_sidebar,
+                  self.workflow_sidebar, self.bookmarks_panel):
             w.hide()
         self.sidebar_stack.show()
 
@@ -545,8 +605,50 @@ class MainWindow(QMainWindow):
         elif index == 10:
             self.sidebar_stack.hide()
             self.image_gen_sidebar.show()
+        elif index == 11:
+            self.sidebar_stack.hide()
+            self.workflow_sidebar.refresh()
+            self.workflow_sidebar.show()
+        elif index == 12:
+            self.sidebar_stack.hide()
+            self.bookmarks_panel.refresh()
+            self.bookmarks_panel.show()
         else:
             self.sidebar_stack.setCurrentIndex(index)
+
+    def _show_stats(self):
+        if not self.current_conv:
+            return
+        
+        stats = self.current_conv.get("stats", {})
+        msg_count = stats.get("message_count", len(self.current_conv.get("messages", [])))
+        tokens = stats.get("total_tokens", 0)
+        
+        # Simple heuristic if stats not yet calculated
+        if tokens == 0:
+            for m in self.current_conv.get("messages", []):
+                tokens += len(str(m.get("content", "")).split()) * 1.5 + 20
+        
+        text = f"<h3>Conversation Statistics</h3>"
+        text += f"<b>Messages:</b> {msg_count}<br>"
+        text += f"<b>Est. Tokens:</b> {int(tokens)}<br>"
+        text += f"<b>Model:</b> {self.current_conv.get('model', 'Unknown')}<br>"
+        if "created_at" in self.current_conv:
+            text += f"<b>Created:</b> {self.current_conv['created_at'][:10]}<br>"
+        
+        QMessageBox.information(self, "Stats", text)
+
+    def _on_bookmark_selected(self, conv_id, msg_id):
+        self._load_conversation(conv_id)
+        # TODO: Scroll to msg_id if possible
+        if len(self.activity_bar.buttons) > 1:
+            self.activity_bar.buttons[1].click()
+
+    def _open_table_editor(self):
+        dialog = TableEditorDialog(parent=self)
+        if dialog.exec_():
+            md = dialog.get_markdown()
+            self.editor_tabs.current_editor().insertText(md)
 
     def _on_file_selected(self, filepath):
         editor = self.editor_tabs.open_file(filepath)
@@ -567,7 +669,15 @@ class MainWindow(QMainWindow):
 
     def _on_mic_triggered(self, enabled):
         if enabled:
-            self.voice_manager.start_recording()
+            # Load settings for latest values
+            voice_cfg = self.settings_data.get("voice", {})
+            self.voice_manager.vad_threshold = voice_cfg.get("vad_threshold", 0.01)
+            self.voice_manager.silence_timeout = voice_cfg.get("silence_timeout", 1.5)
+            self.voice_manager.model_size = voice_cfg.get("whisper_model", "base")
+            self.voice_manager.tts_voice = voice_cfg.get("tts_voice", "en-US-AndrewNeural")
+            
+            hands_free = self.input_widget._hands_free if hasattr(self.input_widget, "_hands_free") else False
+            self.voice_manager.start_recording(hands_free=hands_free)
         else:
             self.voice_manager.stop_recording()
 
@@ -575,9 +685,32 @@ class MainWindow(QMainWindow):
         self.input_widget.mic_btn.click()
 
     def _on_transcription_received(self, text):
+        if not text.strip(): 
+            # In hands-free mode, if we got silence/nothing, we might want to stay in recording 
+            # but usually VoiceManager handles the stop. 
+            # If we are here, something was detected.
+            return
+            
         self.input_widget.append_text(text)
-        self.input_widget.mic_btn.setChecked(False)
-        self.input_widget._on_mic_clicked(False) # Reset UI state
+        hands_free = self.input_widget._hands_free if hasattr(self.input_widget, "_hands_free") else False
+        
+        if hands_free:
+            # Auto-submit in hands-free mode
+            self.input_widget._submit()
+        else:
+            # Normal mode: stop recording and let user edit
+            self.input_widget.mic_btn.setChecked(False)
+            self.input_widget._on_mic_clicked(False) # Reset UI state
+
+    def _on_hands_free_toggled(self, enabled):
+        if enabled:
+            self.status_label.setText("Hands-free Mode: ON")
+        else:
+            self.status_label.setText("Hands-free Mode: OFF")
+            if self.voice_manager.is_recording:
+                self.voice_manager.stop_recording()
+                self.input_widget.mic_btn.setChecked(False)
+                self.input_widget._on_mic_clicked(False)
 
     def _start_indexing(self):
         ws = self.workspace_panel.get_workspace_dir()
@@ -595,6 +728,7 @@ class MainWindow(QMainWindow):
 
     def _on_indexing_complete(self, index):
         self.workspace_index = index
+        save_index(index)
         self.knowledge_sidebar.update_stats(index)
         self.tool_executor.workspace_dir = self.workspace_panel.get_workspace_dir()
         self.status_label.setText(f"RAG Ready: {len(index)} files")
@@ -749,9 +883,44 @@ class MainWindow(QMainWindow):
     def _view_logs(self):
         log_path = Path.home() / ".synapse.log"
         if log_path.exists():
-            self.editor_tabs.open_file(str(log_path))
+            try:
+                content = log_path.read_text(errors='replace')
+                # Show last 500 lines in a dialog
+                lines = content.splitlines()
+                tail = "\n".join(lines[-500:])
+                dlg = QDialog(self)
+                dlg.setWindowTitle("Synapse Logs")
+                dlg.resize(900, 600)
+                layout = QVBoxLayout(dlg)
+                text = QTextEdit()
+                text.setReadOnly(True)
+                text.setFontFamily("monospace")
+                text.setStyleSheet("background: #0d1117; color: #c9d1d9; border: none;")
+                text.setPlainText(tail)
+                layout.addWidget(text)
+                btn_row = QHBoxLayout()
+                open_ext_btn = QPushButton("Open in External Editor")
+                open_ext_btn.clicked.connect(lambda: __import__('subprocess').Popen(['xdg-open', str(log_path)]))
+                refresh_btn = QPushButton("Refresh")
+                def _refresh():
+                    new_content = log_path.read_text(errors='replace')
+                    text.setPlainText("\n".join(new_content.splitlines()[-500:]))
+                    text.moveCursor(text.textCursor().End)
+                refresh_btn.clicked.connect(_refresh)
+                close_btn = QPushButton("Close")
+                close_btn.clicked.connect(dlg.close)
+                btn_row.addWidget(open_ext_btn)
+                btn_row.addWidget(refresh_btn)
+                btn_row.addStretch()
+                btn_row.addWidget(close_btn)
+                layout.addLayout(btn_row)
+                # Scroll to bottom
+                text.moveCursor(text.textCursor().End)
+                dlg.exec_()
+            except Exception as e:
+                self.status_label.setText(f"Error reading logs: {e}")
         else:
-            self.status_label.setText("Log file not found")
+            self.status_label.setText("Log file not found at " + str(log_path))
 
     def _send_message(self, text, images=None, files=None, bypass_rag=False):
         if not self.current_conv:
@@ -760,6 +929,7 @@ class MainWindow(QMainWindow):
         # Reset recursion counter for new user messages
         if text:
             self._recursion_depth = 0
+            self._auto_continue_count = 0
 
         if self._recursion_depth >= self._max_recursion:
             self.status_label.setText("Max agentic steps reached. Stopped.")
@@ -897,6 +1067,7 @@ class MainWindow(QMainWindow):
             worker.token_received.connect(lambda token, p=pane_idx: self._on_token(token, p))
             worker.tool_calls_received.connect(self._on_tool_calls)
             worker.response_finished.connect(lambda text, stats, p=pane_idx, m=m_name: self._on_response_done(text, stats, p, m))
+            worker.truncated.connect(self._on_response_truncated)
             worker.error_occurred.connect(self._on_worker_error)
             
             self._workers[pane_idx] = worker
@@ -1171,6 +1342,34 @@ class MainWindow(QMainWindow):
             self.context_label.setText(f"Context: ~{tokens}/{max_ctx} ({pct}%)")
             self.sum_action.setText(f"Summarize ({pct}% Context)")
 
+    def _on_screenshot_triggered(self):
+        self.screenshot_widget = ScreenCaptureWidget()
+        self.screenshot_widget.screenshot_captured.connect(self.input_widget.add_image_pixmap)
+        self.screenshot_widget.show()
+
+    def _toggle_zen_mode(self):
+        self._zen_mode = not self._zen_mode
+        self.activity_bar.setVisible(not self._zen_mode)
+        self.sidebar_container.setVisible(not self._zen_mode)
+        # Collapse workspace panel if it's there
+        if hasattr(self, "workspace_panel"):
+            self.workspace_panel.setVisible(not self._zen_mode)
+        
+        if self._zen_mode:
+            self.status_label.setText("Focus Mode: ON")
+        else:
+            self.status_label.setText("Focus Mode: OFF")
+
+    def _on_clipboard_changed(self):
+        mime = self._clipboard.mimeData()
+        if mime.hasImage():
+            self.status_label.setText("📋 Image detected in clipboard. Use /attach or Ctrl+V to add.")
+        elif mime.hasText():
+            text = mime.text()
+            # Simple heuristic for code
+            if "def " in text or "class " in text or "import " in text or "{" in text:
+                self.status_label.setText("📋 Code detected in clipboard. Use /attach or Ctrl+V to add.")
+
     def _on_response_done(self, full_text, stats, pane_idx=0, model_name=None):
         conv = self._active_stream_conv or self.current_conv
         if not conv: return
@@ -1223,6 +1422,13 @@ class MainWindow(QMainWindow):
         if pane_idx in self._workers:
             del self._workers[pane_idx]
             
+        if self._consensus_active:
+            self._consensus_responses[m_name] = full_text
+            # If all expected workers are done
+            expected = len(self._streaming_data) # targets count from _send_message
+            if len(self._consensus_responses) >= expected:
+                QTimer.singleShot(500, self._synthesize_consensus)
+
         if not self._workers:
             self._stream_timer.stop()
             self.input_widget.set_streaming(False)
@@ -1240,8 +1446,13 @@ class MainWindow(QMainWindow):
             clean_text = re.sub(r'[*_#`]', '', clean_text)
             self.voice_manager.speak(clean_text)
 
+        # Hands-free loop: Trigger recording after response finishes (if enabled)
         tps = msg["tokens"] / (duration_ms / 1000) if duration_ms > 0 else 0
         self.status_label.setText(f"Done: {msg['tokens']} tokens \u00b7 {tps:.1f} tok/s \u00b7 {duration_ms/1000:.1f}s")
+
+        # Auto-Summary logic
+        if len(conv.get("messages", [])) >= 10 and not conv.get("summary"):
+            self._request_summary(conv)
 
         total_text = "".join(m.get("content", "") for m in conv["messages"])
         tokens = estimate_tokens(total_text)
@@ -1263,6 +1474,104 @@ class MainWindow(QMainWindow):
         queued = self.input_widget.pop_queued_message()
         if queued:
             self._send_message(queued["text"], queued.get("images"), queued.get("files"))
+
+    def _on_response_truncated(self):
+        if not self.settings_data.get("auto_continue", True):
+            return
+        if self._auto_continue_count >= 3:
+            log.warning("Max auto-continue reached (3). Stopping.")
+            self._auto_continue_count = 0
+            return
+
+        self._auto_continue_count += 1
+        log.info(f"Auto-continuing truncated response (Attempt {self._auto_continue_count}/3)")
+        
+        # Inject continuation prompt
+        continuation = "Please continue from where you left off."
+        self._send_message(continuation, bypass_rag=True)
+
+    def _run_consensus(self, prompt):
+        """Run a prompt against multiple models in parallel for consensus."""
+        if not self.current_conv:
+            self._new_chat()
+        
+        # Determine target models
+        available = [self.model_combo.itemText(i) for i in range(self.model_combo.count())]
+        if not available:
+            self.status_label.setText("No models available for consensus")
+            return
+            
+        # Select up to 3 models: 1. Current, 2. A GPT model if available, 3. A Claude model if available
+        # If not, just take the first 3 unique ones
+        targets = [self.model_combo.currentText()]
+        
+        gpt_models = [m for m in available if "gpt" in m.lower() and m not in targets]
+        if gpt_models: targets.append(gpt_models[0])
+        
+        claude_models = [m for m in available if "claude" in m.lower() and m not in targets]
+        if claude_models: targets.append(claude_models[0])
+        
+        while len(targets) < 3 and len(targets) < len(available):
+            for m in available:
+                if m not in targets:
+                    targets.append(m)
+                    break
+        
+        self.status_label.setText(f"Consensus: Running {len(targets)} models...")
+        
+        # Configure SplitView
+        idx = self.chat_tabs.currentIndex()
+        tab_widget = self.chat_tabs.widget(idx)
+        split_view = tab_widget.findChild(SplitViewWidget)
+        
+        if not split_view:
+            # Rebuild tab with SplitView if it's a simple QWebEngineView tab
+            self._add_chat_tab(self.current_conv) # This creates a SplitView by default now
+            idx = self.chat_tabs.currentIndex()
+            tab_widget = self.chat_tabs.widget(idx)
+            split_view = tab_widget.findChild(SplitViewWidget)
+        
+        if split_view:
+            # Clear extra panes or add new ones
+            while len(split_view.panes) < len(targets):
+                split_view.add_pane(available)
+            while len(split_view.panes) > len(targets):
+                split_view.remove_pane(len(split_view.panes)-1)
+            
+            # Set target models for each pane
+            for i, model_name in enumerate(targets):
+                split_view.panes[i].model_combo.setCurrentText(model_name)
+            
+            # Turn on SYNC mode for the input widget automatically
+            self.input_widget.sync_btn.setChecked(True)
+            self._on_sync_toggled(True)
+            
+            # Send the message
+            self._consensus_active = True
+            self._consensus_responses = {}
+            self._send_message(prompt)
+
+    def _synthesize_consensus(self):
+        """Analyze responses from multiple models and provide a synthesized conclusion."""
+        if not self._consensus_responses:
+            return
+
+        self._consensus_active = False
+        self.status_label.setText("Synthesizing consensus...")
+
+        # Construct synthesis prompt
+        summary = "You are a consensus synthesizer. Below are responses from different AI models to the same user query. Compare them, identify key points of agreement and disagreement, and provide a final, high-quality synthesized response.\n\n"
+        
+        for m_name, text in self._consensus_responses.items():
+            summary += f"### Model: {m_name}\n{text}\n\n"
+        
+        summary += "---\nFinal Analysis and Synthesized Response:"
+
+        # Reset split view to normal mode or just append synthesis to chat
+        # For now, let's append it as a system message then trigger assistant
+        # Actually, let's just trigger a normal assistant response with this as context
+        
+        self._send_message(summary, bypass_rag=True)
 
     def _notify_completion(self, title, tokens):
         try:
@@ -1369,6 +1678,11 @@ class MainWindow(QMainWindow):
             self._rag_enabled = not self._rag_enabled
             state = "ON" if self._rag_enabled else "OFF"
             self.status_label.setText(f"RAG context injection: {state}")
+        elif cmd == "/consensus":
+            if not arg:
+                self.status_label.setText("Usage: /consensus <prompt>")
+                return
+            self._run_consensus(arg)
         elif cmd == "/memory":
             if arg == "clear":
                 self.tool_executor.memory.clear()
@@ -1387,7 +1701,7 @@ class MainWindow(QMainWindow):
                         self.status_label.setText("Memory cleared")
                 else:
                     self.status_label.setText("No memories stored yet")
-        elif cmd == "/help":
+        if cmd == "/help":
             help_text = (
                 "/clear - New chat\n/model <name> - Switch model\n/system - Edit system prompt\n"
                 "/search <query> - Search workspace\n/summarize - Summarize to free context\n"
@@ -1395,11 +1709,14 @@ class MainWindow(QMainWindow):
                 "/mcp [name] - Show MCP status or toggle a server\n"
                 "/rag - Toggle RAG context injection\n"
                 "/memory [clear] - View or clear persistent memory\n"
+                "/youtube <url> - Fetch YouTube transcript for RAG\n"
+                "/consensus <prompt> - Query multiple models side-by-side\n"
                 "/help - Show this help\n\n"
                 "Shortcuts:\n"
                 "Ctrl+N: New chat | Ctrl+B: Toggle sidebar | Ctrl+L: Focus input\n"
                 "Ctrl+S: Save file | Ctrl+W: Close tab | Ctrl+Tab/Shift+Tab: Switch tabs\n"
                 "Ctrl+Shift+P: Command palette | Ctrl+Shift+F: Search conversations\n"
+                "Ctrl+Shift+D: Duplicate chat\n"
                 "Ctrl+Shift+H: Search & replace workspace | Ctrl+`: Toggle terminal\n"
                 "Ctrl+,: Settings | Ctrl+I: Import | Ctrl+=/-/0: Zoom\n"
                 "Ctrl+V: Paste image | @ in input: Mention workspace file"
@@ -1427,11 +1744,20 @@ class MainWindow(QMainWindow):
                 if mention == indexed_path or indexed_path.endswith("/" + mention) or indexed_path.endswith("\\" + mention):
                     full = ws / indexed_path
                     try:
-                        file_content = full.read_text(errors='replace')[:20000] # Increased limit for RAG
-                        appended.append(f"\n\n--- File: {indexed_path} ---\n```\n{file_content}\n```")
-                        log.info(f"Injected @mention: {indexed_path}")
-                    except OSError:
-                        pass
+                        ext = Path(indexed_path).suffix.lower()
+                        if ext in ['.pdf', '.docx']:
+                            if ext == '.pdf':
+                                file_content = extract_text_from_pdf(full)[:20000]
+                            else:
+                                file_content = extract_text_from_docx(full)[:20000]
+                        else:
+                            file_content = full.read_text(errors='replace')[:20000]
+                        
+                        if file_content.strip():
+                            appended.append(f"\n\n--- File: {indexed_path} ---\n```\n{file_content}\n```")
+                            log.info(f"Injected @mention: {indexed_path}")
+                    except Exception as e:
+                        log.error(f"Failed to extract mention content for {indexed_path}: {e}")
                     break
         if appended:
             text += "\n".join(appended)
@@ -1479,9 +1805,39 @@ class MainWindow(QMainWindow):
             self._fork_conversation(index)
         elif action == "previewartifact":
             self._preview_artifact(index)
+        elif action == "feedback":
+            try:
+                parts = str(index).split("/")
+                if len(parts) >= 2:
+                    m_idx = int(parts[0])
+                    rating = parts[1]
+                    if 0 <= m_idx < len(self.current_conv["messages"]):
+                        self.current_conv["messages"][m_idx]["feedback"] = rating
+                        self.store.save(self.current_conv)
+                        self.status_label.setText(f"Feedback recorded: {rating}")
+                        self._render_chat()
+            except Exception as e:
+                log.error(f"Error handling feedback: {e}")
         elif action == "navbranch":
             idx, direction = str(index).split("/", 1)
             self._on_navigate_branch(int(idx), direction)
+        elif action == "reorder":
+            try:
+                parts = str(index).split("/")
+                if len(parts) >= 2:
+                    from_idx = int(parts[0])
+                    to_idx = int(parts[1])
+                    msgs = self.current_conv["messages"]
+                    if 0 <= from_idx < len(msgs) and 0 <= to_idx < len(msgs) and from_idx != to_idx:
+                        msg = msgs.pop(from_idx)
+                        msgs.insert(to_idx, msg)
+                        self.store.save(self.current_conv)
+                        self._render_chat()
+                        self.status_label.setText(f"Message moved from {from_idx} to {to_idx}")
+            except Exception as e:
+                log.error(f"Reorder error: {e}")
+        elif action == "conv_stats":
+            self._show_conv_stats()
 
     def _get_code_blocks(self):
         """Helper to collect all code blocks in the current conversation."""
@@ -1502,34 +1858,56 @@ class MainWindow(QMainWindow):
             self.status_label.setText("Code block not found")
             return
         lang, code = all_blocks[code_block_index]
-        if lang.lower() not in ('python', 'python3', 'py', 'bash', 'sh'):
-            self.status_label.setText(f"Cannot run {lang} code blocks")
-            return
-        cmd = ["python3", "-c", code] if lang.lower() in ('python', 'python3', 'py') else ["bash", "-c", code]
-        ws = self.workspace_panel.get_workspace_dir()
-        try:
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=30,
-                cwd=str(ws) if ws else None
-            )
-            output = result.stdout
-            if result.stderr:
-                output += "\n" + result.stderr
-            output = output.strip() or "(no output)"
-            exec_msg = f"```\n$ Run {lang} code block\nExit code: {result.returncode}\n\n{output}\n```"
-            self.current_conv["messages"].append({
+        
+        if lang.lower() in ('python', 'python3', 'py'):
+            self.status_label.setText("Running Python...")
+            res = self.code_executor.execute_python(code)
+            
+            output = f"Exit code {res['exit_code']}\n"
+            if res['stdout']:
+                output += f"STDOUT:\n{res['stdout']}\n"
+            if res['stderr']:
+                output += f"STDERR:\n{res['stderr']}\n"
+            
+            content = f"```\n$ Run {lang} code block\n{output}\n```"
+            if res['images']:
+                for img_b64 in res['images']:
+                    content += f"\n![Plot](data:image/png;base64,{img_b64})\n"
+                    
+            msg = {
                 "role": "assistant",
-                "content": exec_msg,
+                "content": content,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "model": "code-execution",
-            })
+            }
+            self.current_conv["messages"].append(msg)
             self.store.save(self.current_conv)
             self._render_chat()
-            self.status_label.setText(f"Code executed (exit {result.returncode})")
-        except subprocess.TimeoutExpired:
-            self.status_label.setText("Code execution timed out (30s)")
-        except Exception as e:
-            self.status_label.setText(f"Execution error: {e}")
+            self.status_label.setText("Execution finished")
+            
+        elif lang.lower() in ('bash', 'sh'):
+            self.status_label.setText("Running Bash...")
+            ws = self.workspace_panel.get_workspace_dir()
+            try:
+                result = subprocess.run(
+                    ["bash", "-c", code], capture_output=True, text=True, timeout=30,
+                    cwd=str(ws) if ws else None
+                )
+                output = (result.stdout + "\n" + result.stderr).strip() or "(no output)"
+                exec_msg = f"```\n$ Run {lang} code block\nExit code: {result.returncode}\n\n{output}\n```"
+                self.current_conv["messages"].append({
+                    "role": "assistant",
+                    "content": exec_msg,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "model": "code-execution",
+                })
+                self.store.save(self.current_conv)
+                self._render_chat()
+                self.status_label.setText("Execution finished")
+            except Exception as e:
+                self.status_label.setText(f"Run failed: {e}")
+        else:
+            self.status_label.setText(f"Cannot run {lang} code blocks")
 
     def _on_template_applied(self, content):
         self.input_widget.set_text(content)
@@ -1561,7 +1939,7 @@ class MainWindow(QMainWindow):
             self.editor_tabs.setCurrentIndex(idx)
             
         if canvas:
-            canvas.set_content(code, title)
+            canvas.set_content(code, title, content_type=lang)
             # Ensure focus stays on the editor area if it was there
             self.status_label.setText(f"Showing {lang.upper()} artifact in Canvas")
 
@@ -1648,6 +2026,11 @@ class MainWindow(QMainWindow):
         if self.current_conv:
             self._send_message("Continue from where you left off.", bypass_rag=True)
 
+    def _duplicate_active_chat(self):
+        if self.current_conv:
+            self.sidebar.duplicate_chat(self.current_conv["id"])
+            self.status_label.setText("Conversation duplicated")
+
     def _fork_conversation(self, index):
         if not self.current_conv:
             return
@@ -1720,21 +2103,28 @@ class MainWindow(QMainWindow):
             if msg["role"] == "assistant":
                 content = msg["content"]
                 # Match blocks and capture context
-                matches = list(re.finditer(r'```(?:\w*)\n(.*?)\n```', content, re.DOTALL))
+                matches = list(re.finditer(r'```(\w*)\n(.*?)\n```', content, re.DOTALL))
                 for m in matches:
-                    # Look for filename in the 300 chars BEFORE or 300 chars AFTER the match
-                    start = max(0, m.start() - 300)
-                    end = min(len(content), m.end() + 300)
-                    context = content[start:end]
+                    start, end = m.span()
+                    # Context: 100 chars before the block
+                    context = content[max(0, start-100):start]
                     
                     # Search for common path patterns
-                    path_match = re.search(r'[`"\' ]([\w\-/._]+\.\w+)[`"\' ]', context)
-                    # Also look for "File: path" or "in path"
+                    # 1. Look for language block filename pattern: ```python:main.py
+                    lang_marker = m.group(1)
+                    path_match = re.search(r'[:/]([\w\-/._]+\.\w+)', lang_marker)
+                    
+                    # 2. Search for common path patterns in context
+                    if not path_match:
+                        # Improved: Look for paths surrounded by quotes or backticks
+                        path_match = re.search(r'[`"\' ]([\w\-/._]+\.\w+)[`"\' ]', context)
+                    
+                    # 3. Also look for "File: path" or "in path"
                     if not path_match:
                         path_match = re.search(r'(?:[Ff]ile|[Ii]n):?\s*([\w\-/._]+\.\w+)', context)
                     
                     path = path_match.group(1) if path_match else None
-                    all_blocks.append((path, m.group(1)))
+                    all_blocks.append((path, m.group(2)))
         
         if code_block_index < 0 or code_block_index >= len(all_blocks):
             self.status_label.setText(f"Code block {code_block_index} not found (Total blocks: {len(all_blocks)})")
@@ -2000,6 +2390,19 @@ class MainWindow(QMainWindow):
             {"id": "workspace_search", "label": "Search & Replace in Workspace", "shortcut": "Ctrl+Shift+H"},
             {"id": "export_all", "label": "Export All Conversations (JSON)", "shortcut": ""},
             {"id": "delete_all", "label": "Delete All Conversations", "shortcut": ""},
+            {"id": "quick_chat", "label": "Quick Chat (Floating)", "shortcut": ""},
+            {"id": "playground", "label": "Model Playground", "shortcut": ""},
+            {"id": "arena", "label": "Model Arena (A/B Test)", "shortcut": ""},
+            {"id": "prompt_lab", "label": "Prompt Lab (Multi-Compare)", "shortcut": ""},
+            {"id": "conv_stats", "label": "Conversation Statistics", "shortcut": ""},
+            {"id": "session_replay", "label": "Session Replay", "shortcut": ""},
+            {"id": "auto_tag", "label": "Auto-Tag Current Conversation", "shortcut": ""},
+            {"id": "import_theme", "label": "Import Custom Theme (.qss)", "shortcut": ""},
+            {"id": "streaming_instant", "label": "Streaming Speed: Instant (10ms)", "shortcut": ""},
+            {"id": "streaming_fast", "label": "Streaming Speed: Fast (30ms)", "shortcut": ""},
+            {"id": "streaming_normal", "label": "Streaming Speed: Normal (50ms)", "shortcut": ""},
+            {"id": "streaming_slow", "label": "Streaming Speed: Slow (100ms)", "shortcut": ""},
+            {"id": "streaming_typewriter", "label": "Streaming Speed: Typewriter (200ms)", "shortcut": ""},
         ]
         for tname in THEMES:
             commands.append({"id": f"theme_{tname}", "label": f"Theme: {tname}", "shortcut": ""})
@@ -2036,6 +2439,19 @@ class MainWindow(QMainWindow):
             "workspace_search": self._workspace_search_replace,
             "export_all": self._export_all_conversations,
             "delete_all": self._delete_all_conversations,
+            "quick_chat": self._open_quick_chat,
+            "playground": self._open_playground,
+            "arena": self._open_arena,
+            "prompt_lab": self._open_prompt_lab,
+            "conv_stats": self._show_conv_stats,
+            "session_replay": self._start_replay,
+            "auto_tag": self._auto_tag_conversation,
+            "import_theme": self._import_custom_theme,
+            "streaming_instant": lambda: self._set_streaming_speed(10),
+            "streaming_fast": lambda: self._set_streaming_speed(30),
+            "streaming_normal": lambda: self._set_streaming_speed(50),
+            "streaming_slow": lambda: self._set_streaming_speed(100),
+            "streaming_typewriter": lambda: self._set_streaming_speed(200),
         }
         for tname in THEMES:
             dispatch[f"theme_{tname}"] = lambda n=tname: self._on_theme_changed(n)
@@ -2122,10 +2538,32 @@ class MainWindow(QMainWindow):
             path, _ = QFileDialog.getSaveFileName(self, "Export", f"{title}.md", "Markdown (*.md)")
             if path:
                 with open(path, "w") as f:
-                    f.write(f"# {title}\n\nModel: {conv.get('model', '')}\n\n---\n\n")
+                    # YAML Frontmatter
+                    f.write("---\n")
+                    f.write(f"title: {title}\n")
+                    f.write(f"model: {conv.get('model', 'unknown')}\n")
+                    f.write(f"date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    if conv.get("system_prompt"):
+                        f.write(f"system_prompt: |\n  {conv['system_prompt'].replace('\\n', '  \\n')}\n")
+                    f.write("---\n\n")
+                    f.write(f"# {title}\n\n")
+                    
                     for msg in conv.get("messages", []):
-                        role = "**You**" if msg.get("role") == "user" else "**Assistant**"
-                        f.write(f"{role}:\n\n{msg.get('content', '')}\n\n---\n\n")
+                        role = msg.get("role", "assistant")
+                        role_label = "**You**" if role == "user" else f"**{role.capitalize()}**"
+                        content = msg.get("content", "")
+                        
+                        f.write(f"{role_label}:\n\n{content}\n\n")
+                        
+                        if msg.get("tool_calls"):
+                            f.write("*Tool Calls:*\n")
+                            for tc in msg["tool_calls"]:
+                                name = tc.get("function", {}).get("name", "tool")
+                                args = tc.get("function", {}).get("arguments", {})
+                                f.write(f"- `{name}({args})`\n")
+                            f.write("\n")
+                            
+                        f.write("---\n\n")
         elif fmt == "html":
             path, _ = QFileDialog.getSaveFileName(self, "Export", f"{title}.html", "HTML (*.html)")
             if path:
@@ -2271,11 +2709,11 @@ class MainWindow(QMainWindow):
         
         # Use WorkerFactory to support Ollama, OpenAI, and Anthropic
         self.worker = WorkerFactory(
-            model, 
-            temp_messages, 
+            model,
+            temp_messages,
             self.current_conv.get("system_prompt", ""),
-            gen_params=gen_params,
-            tools=tools,
+            self.settings_data.get("gen_params", DEFAULT_GEN_PARAMS),
+            tools=[],
             settings=self.settings_data
         )
         self.worker.response_finished.connect(self._on_summary_done)
@@ -2448,6 +2886,8 @@ class MainWindow(QMainWindow):
             self._tray_icon.showMessage("Synapse", f"Task completed: {task['prompt'][:50]}", 3000)
 
     def _on_image_gen_requested(self, provider, params):
+        if provider == "openai":
+            params["api_key"] = self.settings_data.get("openai_key")
         self.image_gen_backend.generate(provider, params, self._on_image_gen_finished)
 
     def _on_image_gen_finished(self, result):
@@ -2462,3 +2902,262 @@ class MainWindow(QMainWindow):
     def _on_image_selected(self, filepath):
         import webbrowser
         webbrowser.open(filepath)
+    def _request_summary(self, conv):
+        log.info(f"Requesting auto-summary for conversation {conv['id']}")
+        model = self.model_combo.currentText() or DEFAULT_MODEL
+        worker = SummaryWorker(model, conv["id"], conv["messages"], self.settings_data)
+        worker.summary_ready.connect(self._on_summary_ready)
+        worker.start()
+        # Keep reference to avoid GC
+        self._summary_workers = getattr(self, "_summary_workers", [])
+        self._summary_workers.append(worker)
+
+    def _on_summary_ready(self, conv_id, summary):
+        log.info(f"Summary received for {conv_id}: {summary}")
+        if self.current_conv and self.current_conv["id"] == conv_id:
+            self.current_conv["summary"] = summary
+            self.store.save(self.current_conv)
+            self.status_label.setText(f"Auto-Summary: {summary[:60]}...")
+            # Cleanup worker
+            sender = self.sender()
+            if sender in self._summary_workers:
+                self._summary_workers.remove(sender)
+    def _run_youtube_rag(self, url):
+        self.status_label.setText(f"Fetching YouTube transcript: {url[:30]}...")
+        self.input_widget.set_streaming(True)
+        worker = YouTubeWorker(url)
+        worker.finished.connect(self._on_youtube_finished)
+        worker.start()
+        # Keep reference
+        self._yt_workers = getattr(self, "_yt_workers", [])
+        self._yt_workers.append(worker)
+
+    def _on_youtube_finished(self, transcript, metadata, error):
+        self.input_widget.set_streaming(False)
+        sender = self.sender()
+        if sender in getattr(self, "_yt_workers", []):
+            self._yt_workers.remove(sender)
+
+        if error:
+            QMessageBox.warning(self, "YouTube Error", f"Failed to fetch transcript: {error}")
+            self.status_label.setText("YouTube fetch failed")
+            return
+
+        from ..utils.youtube_handler import YouTubeHandler
+        context = YouTubeHandler.format_as_context(transcript, metadata)
+        
+        # Add a special system-like message to conversation
+        msg = {
+            "id": str(uuid.uuid4()),
+            "role": "system",
+            "content": context,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "metadata": {"type": "youtube", "video_id": metadata["id"]}
+        }
+        if self.current_conv:
+            self.current_conv["messages"].append(msg)
+            self.store.save(self.current_conv)
+            self._render_chat()
+            self.status_label.setText(f"YouTube context added: {metadata['title']}")
+            
+            # Proactively suggest a summary or let the user ask
+            self.input_widget.input_box.setPlainText(f"Summarize the key points from this video: '{metadata['title']}'")
+            self.input_widget.input_box.setFocus()
+    def _setup_global_hotkey(self):
+        hotkey_str = self.settings_data.get("shortcuts", DEFAULT_SHORTCUTS).get("global_summon", "<ctrl>+<alt>+s")
+        self.hotkey_manager = GlobalHotkeyManager(hotkey_str)
+        self.hotkey_manager.hotkey_triggered.connect(self._on_global_hotkey)
+        self.hotkey_manager.start()
+
+    def _on_global_hotkey(self):
+        if self.isVisible() and self.isActiveWindow():
+            self.hide()
+        else:
+            self.showNormal()
+            self.activateWindow()
+            self.raise_()
+            self.input_widget.input_box.setFocus()
+
+    # --- F11: Quick Chat ---
+    def _open_quick_chat(self):
+        if not hasattr(self, '_quick_chat') or self._quick_chat is None:
+            models = [self.model_combo.itemText(i) for i in range(self.model_combo.count())]
+            self._quick_chat = QuickChatWidget(models)
+            self._quick_chat.closed.connect(lambda: setattr(self, '_quick_chat', None))
+        self._quick_chat.showAtCursor()
+
+    # --- F13: Playground ---
+    def _open_playground(self):
+        models = [self.model_combo.itemText(i) for i in range(self.model_combo.count())]
+        dlg = PlaygroundPanel(models, self.settings_data, self)
+        dlg.exec_()
+
+    # --- F30: Arena ---
+    def _open_arena(self):
+        models = [self.model_combo.itemText(i) for i in range(self.model_combo.count())]
+        if len(models) < 2:
+            QMessageBox.information(self, "Arena", "Need at least 2 models for an arena battle.")
+            return
+        dlg = ArenaDialog(models, self.settings_data, self)
+        dlg.exec_()
+
+    # --- F34: Prompt Lab ---
+    def _open_prompt_lab(self):
+        models = [self.model_combo.itemText(i) for i in range(self.model_combo.count())]
+        dlg = PromptLab(models, self.settings_data, self)
+        dlg.exec_()
+
+    # --- F28: Conversation Statistics ---
+    def _show_conv_stats(self):
+        if not self.current_conv:
+            return
+        msgs = self.current_conv.get("messages", [])
+        user_msgs = [m for m in msgs if m.get("role") == "user"]
+        asst_msgs = [m for m in msgs if m.get("role") == "assistant"]
+        total_tokens = sum(m.get("tokens", 0) for m in asst_msgs)
+        total_duration = sum(m.get("duration_ms", 0) for m in asst_msgs)
+        avg_time = (total_duration // max(len(asst_msgs), 1))
+        models_used = list(set(m.get("model", "?") for m in asst_msgs if m.get("model")))
+        code_blocks = sum(m.get("content", "").count("```") // 2 for m in msgs)
+        created = self.current_conv.get("created", "?")
+
+        stats_text = (
+            f"Messages: {len(msgs)} ({len(user_msgs)} user, {len(asst_msgs)} assistant)\n"
+            f"Total tokens: {total_tokens:,}\n"
+            f"Avg response time: {avg_time}ms\n"
+            f"Code blocks: {code_blocks}\n"
+            f"Models used: {', '.join(models_used) if models_used else 'N/A'}\n"
+            f"Created: {created[:10] if len(created) > 10 else created}"
+        )
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Conversation Statistics")
+        dlg.resize(400, 280)
+        layout = QVBoxLayout(dlg)
+        text = QTextEdit()
+        text.setReadOnly(True)
+        text.setStyleSheet("background: #0d1117; color: #e6edf3; border: none; font-family: monospace;")
+        text.setPlainText(stats_text)
+        layout.addWidget(text)
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dlg.close)
+        layout.addWidget(close_btn)
+        dlg.exec_()
+
+    # --- F31: Session Replay ---
+    def _start_replay(self):
+        if not self.current_conv or not self.current_conv.get("messages"):
+            return
+        self._replay_msgs = list(self.current_conv["messages"])
+        self._replay_idx = 0
+        self._replay_char_idx = 0
+        self._replay_buf = ""
+        self._replay_speed = 15  # ms per char
+
+        # Build partial conversation for replay
+        self._replay_conv_backup = self.current_conv.copy()
+        self.current_conv["messages"] = []
+        self._render_chat()
+        self.status_label.setText("Replay mode - press Escape to stop")
+        QTimer.singleShot(500, self._replay_next)
+
+    def _replay_next(self):
+        if not hasattr(self, '_replay_msgs') or self._replay_idx >= len(self._replay_msgs):
+            self._stop_replay()
+            return
+
+        msg = self._replay_msgs[self._replay_idx]
+        if msg.get("role") == "user":
+            self.current_conv["messages"].append(dict(msg))
+            self._render_chat()
+            self._replay_idx += 1
+            QTimer.singleShot(400, self._replay_next)
+        elif msg.get("role") == "assistant":
+            if self._replay_char_idx == 0:
+                # Start streaming this message
+                partial_msg = dict(msg)
+                partial_msg["content"] = ""
+                self.current_conv["messages"].append(partial_msg)
+                self._replay_buf = msg.get("content", "")
+
+            content = self._replay_buf
+            self._replay_char_idx += 3  # 3 chars at a time for speed
+            if self._replay_char_idx >= len(content):
+                self.current_conv["messages"][-1]["content"] = content
+                self._render_chat()
+                self._replay_idx += 1
+                self._replay_char_idx = 0
+                QTimer.singleShot(400, self._replay_next)
+            else:
+                self.current_conv["messages"][-1]["content"] = content[:self._replay_char_idx]
+                self._render_chat()
+                QTimer.singleShot(self._replay_speed, self._replay_next)
+        else:
+            self.current_conv["messages"].append(dict(msg))
+            self._replay_idx += 1
+            QTimer.singleShot(100, self._replay_next)
+
+    def _stop_replay(self):
+        if hasattr(self, '_replay_conv_backup'):
+            self.current_conv.update(self._replay_conv_backup)
+            self._render_chat()
+            del self._replay_conv_backup
+        if hasattr(self, '_replay_msgs'):
+            del self._replay_msgs
+        self.status_label.setText("Replay finished")
+
+    # --- F12: Auto-Tagging ---
+    def _auto_tag_conversation(self):
+        if not self.current_conv or not self.current_conv.get("messages"):
+            return
+        msgs = self.current_conv["messages"][:4]
+        preview = "\n".join(f"{m['role']}: {m['content'][:200]}" for m in msgs)
+        tag_prompt = (
+            "Classify this conversation into 1-2 tags from this list: "
+            "coding, writing, research, math, data, debugging, learning, creative, general. "
+            "Reply with ONLY the tag names separated by commas, nothing else.\n\n"
+            f"{preview}"
+        )
+        model = self.model_combo.currentText() or DEFAULT_MODEL
+        messages = [{"role": "user", "content": tag_prompt}]
+        worker = WorkerFactory(model, messages, "", DEFAULT_GEN_PARAMS, self.settings_data, tools=[])
+        worker.response_finished.connect(self._on_auto_tag_done)
+        worker.error_occurred.connect(lambda e: self.status_label.setText(f"Auto-tag failed: {e}"))
+        worker.start()
+        self._tag_workers = getattr(self, '_tag_workers', [])
+        self._tag_workers.append(worker)
+        self.status_label.setText("Auto-tagging...")
+
+    def _on_auto_tag_done(self, text, stats):
+        tags = [t.strip().lower() for t in text.strip().split(",") if t.strip()]
+        valid = {"coding", "writing", "research", "math", "data", "debugging", "learning", "creative", "general"}
+        tags = [t for t in tags if t in valid][:2]
+        if tags and self.current_conv:
+            existing = self.current_conv.get("tags", [])
+            for t in tags:
+                if t not in existing:
+                    existing.append(t)
+            self.current_conv["tags"] = existing
+            self.store.save(self.current_conv)
+            self.status_label.setText(f"Tagged: {', '.join(tags)}")
+
+    # --- F29: Custom CSS Themes ---
+    def _import_custom_theme(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Import Theme", "", "QSS Files (*.qss);;All (*)")
+        if not path:
+            return
+        from ..utils.constants import CONFIG_DIR
+        themes_dir = CONFIG_DIR / "themes"
+        themes_dir.mkdir(parents=True, exist_ok=True)
+        name = Path(path).stem
+        dest = themes_dir / f"{name}.qss"
+        dest.write_text(Path(path).read_text())
+        QApplication.instance().setStyleSheet(dest.read_text())
+        self.status_label.setText(f"Theme imported and applied: {name}")
+
+    # --- F38: Streaming Speed Control ---
+    def _set_streaming_speed(self, speed_ms):
+        self._streaming_delay = speed_ms
+        self._stream_timer.setInterval(max(10, speed_ms))
+        self.settings_data["streaming_speed"] = speed_ms
+        save_settings(self.settings_data)

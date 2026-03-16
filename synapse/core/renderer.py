@@ -3,7 +3,11 @@ import json
 import markdown
 import html as html_module
 from pygments.formatters import HtmlFormatter
-from ..utils.constants import APP_NAME, CHAT_HTML_TEMPLATE, detect_mime, format_time
+from ..utils.constants import (
+    APP_NAME, CHAT_HTML_TEMPLATE, MERMAID_JS_URL,
+    KATEX_CSS_URL, KATEX_JS_URL, KATEX_AUTO_RENDER_JS_URL,
+    detect_mime, format_time
+)
 
 
 class ChatRenderer:
@@ -55,7 +59,13 @@ class ChatRenderer:
                 inner = re.search(r'<code[^>]*>(.*?)</code>', code_content, re.DOTALL)
                 if inner:
                     mermaid_src = html_module.unescape(inner.group(1))
-                    return f'<div class="mermaid">{mermaid_src}</div>'
+                    btns = f'<button class="cb-btn cb-preview" onclick="window.location.href=\'action://previewartifact/{ci}\'">&#128065; Open in Canvas</button>'
+                    return (
+                        f'<div class="code-block">'
+                        f'<div class="cb-header"><span class="cb-lang">mermaid</span><span class="cb-actions">{btns}</span></div>'
+                        f'<div class="mermaid">{mermaid_src}</div>'
+                        f'</div>'
+                    )
 
             lang_label = lang or "text"
             ci = self._code_idx
@@ -65,7 +75,7 @@ class ChatRenderer:
             preview_btn = ""
             if lang_lower in ('html', 'svg', 'xml', 'react', 'jsx', 'tsx', 'javascript', 'js'):
                 # Artifact-capable language
-                preview_btn = f'<button class="cb-btn cb-preview" onclick="window.location.href=\'action://previewartifact/{ci}\'">&#128065; Preview</button>'
+                preview_btn = f'<button class="cb-btn cb-preview" onclick="window.location.href=\'action://previewartifact/{ci}\'">&#128065; Open in Canvas</button>'
 
             run_btn = ""
             if lang_lower in ('python', 'python3', 'py'):
@@ -199,7 +209,7 @@ class ChatRenderer:
                 meta = self._meta(msg) if role == "assistant" else ""
 
                 msgs_html += (
-                    f'<div class="msg {role}">'
+                    f'<div class="msg {role}" data-idx="{idx}">'
                     f'  <div class="msg-gutter">{avatar}</div>'
                     f'  <div class="msg-body">'
                     f'    <div class="msg-head"><span class="msg-name">{label}</span>{time_html}{self._branch_navigation(idx, msg, history)}</div>'
@@ -213,6 +223,10 @@ class ChatRenderer:
 
         template = CHAT_HTML_TEMPLATE.replace("PYGMENTS_CSS", self.pygments_css)
         template = template.replace("FONT_SIZE_VAL", str(self.font_size))
+        template = template.replace("MERMAID_JS_URL", MERMAID_JS_URL)
+        template = template.replace("KATEX_CSS_URL", KATEX_CSS_URL)
+        template = template.replace("KATEX_JS_URL", KATEX_JS_URL)
+        template = template.replace("KATEX_AUTO_RENDER_JS_URL", KATEX_AUTO_RENDER_JS_URL)
         return template.replace("MESSAGES_HTML", msgs_html)
 
     @staticmethod
@@ -226,7 +240,9 @@ class ChatRenderer:
     @staticmethod
     def _user_actions(idx, msg):
         bm = "Unbookmark" if msg.get("bookmarked") else "Bookmark"
+        drag = f'<span class="drag-handle" draggable="true" ondragstart="event.dataTransfer.setData(\'text/plain\',\'{idx}\')" title="Drag to reorder">&#x2630;</span>'
         return (
+            f'{drag}'
             f'<button onclick="window.location.href=\'action://edit/{idx}\'">Edit</button>'
             f'<button onclick="window.location.href=\'action://fork/{idx}\'">Fork</button>'
             f'<button onclick="window.location.href=\'action://bookmark/{idx}\'">{bm}</button>'
@@ -236,7 +252,16 @@ class ChatRenderer:
     def _assistant_actions(idx, msg, is_last):
         bm = "Unbookmark" if msg.get("bookmarked") else "Bookmark"
         cont = f'<button onclick="window.location.href=\'action://continue/{idx}\'">Continue</button>' if is_last else ""
+        
+        fb_up_active = "fb-active" if msg.get("feedback") == "up" else ""
+        fb_down_active = "fb-active" if msg.get("feedback") == "down" else ""
+        feedback = (
+            f'<button class="fb-btn {fb_up_active}" onclick="window.location.href=\'action://feedback/{idx}/up\'" title="Thumbs Up">&#128077;</button>'
+            f'<button class="fb-btn {fb_down_active}" onclick="window.location.href=\'action://feedback/{idx}/down\'" title="Thumbs Down">&#128078;</button>'
+        )
+
         return (
+            f'<span style="margin-right:8px">{feedback}</span>'
             f'<button onclick="window.location.href=\'action://copy/{idx}\'">Copy</button>'
             f'<button onclick="window.location.href=\'action://regenerate/{idx}\'">Regenerate</button>'
             f'<button onclick="window.location.href=\'action://retrywith/{idx}\'">Retry with&hellip;</button>'

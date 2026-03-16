@@ -10,15 +10,13 @@ import json
 import time
 from pathlib import Path
 
-# Add project root to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-# Must be set before QApplication is created
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication
 QApplication.setAttribute(Qt.AA_ShareOpenGLContexts, True)
 
-from PyQt5.QtWebEngineWidgets import QWebEngineView  # must import before QApp
+from PyQt5.QtWebEngineWidgets import QWebEngineView
 from PyQt5.QtCore import QTimer, QSize
 from PyQt5.QtGui import QPixmap
 
@@ -26,7 +24,6 @@ SCREENSHOT_DIR = Path(__file__).parent / "screenshots"
 CONV_DIR = Path.home() / ".local" / "share" / "synapse" / "conversations"
 SETTINGS_FILE = Path.home() / ".local" / "share" / "synapse" / "settings.json"
 
-# Backup and restore helpers
 _backup_convs = []
 
 def backup_conversations():
@@ -37,11 +34,9 @@ def backup_conversations():
             _backup_convs.append((f.name, f.read_text()))
 
 def restore_conversations():
-    # Clear any new ones
     if CONV_DIR.exists():
         for f in CONV_DIR.glob("*.json"):
             f.unlink()
-    # Restore originals
     for name, content in _backup_convs:
         (CONV_DIR / name).write_text(content)
 
@@ -51,7 +46,6 @@ def clear_conversations():
             f.unlink()
 
 def save_screenshot(widget, name, region=None):
-    """Grab a screenshot of a widget or region and save it."""
     SCREENSHOT_DIR.mkdir(exist_ok=True)
     if region:
         pixmap = widget.grab(region)
@@ -62,7 +56,6 @@ def save_screenshot(widget, name, region=None):
     print(f"  -> Saved: {filepath}")
 
 def inject_demo_messages(window):
-    """Add some fake messages to current conversation for a nice screenshot."""
     conv = window.current_conv
     if not conv:
         return
@@ -127,11 +120,9 @@ def run_screenshots():
     from synapse.utils.constants import DARK_THEME_QSS
     app.setStyleSheet(DARK_THEME_QSS)
 
-    # Backup existing conversations, then clear for clean screenshots
     backup_conversations()
     clear_conversations()
 
-    # Force onboarding_complete so the wizard doesn't pop up
     if SETTINGS_FILE.exists():
         settings = json.loads(SETTINGS_FILE.read_text())
     else:
@@ -143,13 +134,13 @@ def run_screenshots():
     window = MainWindow()
     window.resize(1920, 1080)
     window.show()
-    # Center on screen
     screen = app.primaryScreen().geometry()
     x = (screen.width() - 1920) // 2
     y = (screen.height() - 1080) // 2
     window.move(x, y)
 
     step = [0]
+    total_steps = 24
 
     def next_step():
         try:
@@ -159,7 +150,7 @@ def run_screenshots():
             import traceback
             traceback.print_exc()
         step[0] += 1
-        if step[0] <= 14:
+        if step[0] <= total_steps:
             QTimer.singleShot(800, next_step)
         else:
             print("\nAll screenshots captured!")
@@ -168,8 +159,7 @@ def run_screenshots():
 
     def _do_step(s):
         if s == 0:
-            # 1. Welcome screen (empty chat)
-            print("[1/14] Welcome screen...")
+            print("[1] Welcome screen...")
             window._on_activity_changed(1)
             window._render_chat()
             QApplication.processEvents()
@@ -178,8 +168,7 @@ def run_screenshots():
             save_screenshot(window, "01_welcome")
 
         elif s == 2:
-            # 2. Chat with demo messages
-            print("[2/14] Chat conversation...")
+            print("[2] Chat conversation...")
             inject_demo_messages(window)
             window.title_label.setText("Python Decorators")
             tab_idx = window.chat_tabs.currentIndex()
@@ -192,8 +181,7 @@ def run_screenshots():
             save_screenshot(window, "02_chat")
 
         elif s == 4:
-            # 3. Model Manager
-            print("[3/14] Model Manager...")
+            print("[3] Model Manager...")
             window._on_activity_changed(2)
             QApplication.processEvents()
 
@@ -201,8 +189,7 @@ def run_screenshots():
             save_screenshot(window, "03_models")
 
         elif s == 6:
-            # 4. Template Library
-            print("[4/14] Template Library...")
+            print("[4] Template Library...")
             window._on_activity_changed(6)
             QApplication.processEvents()
 
@@ -210,8 +197,7 @@ def run_screenshots():
             save_screenshot(window, "04_templates")
 
         elif s == 8:
-            # 5. Analytics
-            print("[5/14] Analytics Dashboard...")
+            print("[5] Analytics Dashboard...")
             window._on_activity_changed(7)
             QApplication.processEvents()
 
@@ -219,8 +205,7 @@ def run_screenshots():
             save_screenshot(window, "05_analytics")
 
         elif s == 10:
-            # 6. Image Generation sidebar
-            print("[6/14] Image Generation...")
+            print("[6] Image Generation...")
             window._on_activity_changed(10)
             QApplication.processEvents()
 
@@ -228,8 +213,7 @@ def run_screenshots():
             save_screenshot(window, "06_image_gen")
 
         elif s == 12:
-            # 7. Settings dialog
-            print("[7/14] Settings Dialog...")
+            print("[7] Settings Dialog...")
             from synapse.ui.settings_dialog import SettingsDialog
             dlg = SettingsDialog(window.settings_data, window)
             dlg.resize(800, 650)
@@ -239,8 +223,7 @@ def run_screenshots():
             dlg.close()
 
         elif s == 13:
-            # Onboarding wizard
-            print("[8/14] Onboarding Wizard...")
+            print("[8] Onboarding Wizard...")
             from synapse.ui.onboarding import OnboardingWizard
             wiz = OnboardingWizard(window)
             wiz.show()
@@ -249,8 +232,78 @@ def run_screenshots():
             wiz.close()
 
         elif s == 14:
-            # Back to chat for final context
-            print("[Done] Restoring state...")
+            print("[9] Bookmarks Panel...")
+            window._on_activity_changed(12)
+            QApplication.processEvents()
+
+        elif s == 15:
+            save_screenshot(window, "09_bookmarks")
+
+        elif s == 16:
+            print("[10] Workflows Panel...")
+            window._on_activity_changed(11)
+            QApplication.processEvents()
+
+        elif s == 17:
+            save_screenshot(window, "10_workflows")
+
+        elif s == 18:
+            print("[11] Model Arena...")
+            try:
+                models = [window.model_combo.itemText(i) for i in range(window.model_combo.count())]
+                if len(models) >= 2:
+                    from synapse.ui.arena_dialog import ArenaDialog
+                    dlg = ArenaDialog(models, window.settings_data, window)
+                    dlg.show()
+                    QApplication.processEvents()
+                    save_screenshot(dlg, "11_arena")
+                    dlg.close()
+                else:
+                    print("    (skipped - need 2+ models)")
+            except Exception as e:
+                print(f"    Arena error: {e}")
+
+        elif s == 19:
+            print("[12] Prompt Lab...")
+            try:
+                models = [window.model_combo.itemText(i) for i in range(window.model_combo.count())]
+                from synapse.ui.prompt_lab import PromptLab
+                dlg = PromptLab(models, window.settings_data, window)
+                dlg.show()
+                QApplication.processEvents()
+                save_screenshot(dlg, "12_prompt_lab")
+                dlg.close()
+            except Exception as e:
+                print(f"    Prompt Lab error: {e}")
+
+        elif s == 20:
+            print("[13] Playground...")
+            try:
+                models = [window.model_combo.itemText(i) for i in range(window.model_combo.count())]
+                from synapse.ui.playground import PlaygroundPanel
+                dlg = PlaygroundPanel(models, window.settings_data, window)
+                dlg.show()
+                QApplication.processEvents()
+                save_screenshot(dlg, "13_playground")
+                dlg.close()
+            except Exception as e:
+                print(f"    Playground error: {e}")
+
+        elif s == 21:
+            print("[14] Branch Tree...")
+            window._on_activity_changed(8)
+            QApplication.processEvents()
+
+        elif s == 22:
+            save_screenshot(window, "14_branch_tree")
+
+        elif s == 23:
+            print("[15] Knowledge/RAG...")
+            window._on_activity_changed(5)
+            QApplication.processEvents()
+
+        elif s == 24:
+            save_screenshot(window, "15_knowledge")
             window._on_activity_changed(1)
             QApplication.processEvents()
 

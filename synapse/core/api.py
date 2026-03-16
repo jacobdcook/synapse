@@ -2,6 +2,7 @@ import json
 import urllib.request
 import urllib.error
 import logging
+import time
 from PyQt5.QtCore import QThread, pyqtSignal
 from ..utils.constants import get_ollama_url
 
@@ -68,6 +69,7 @@ class BaseAIWorker(QThread):
     response_finished = pyqtSignal(str, dict)
     error_occurred = pyqtSignal(str)
     tool_calls_received = pyqtSignal(list)
+    truncated = pyqtSignal()
 
     def __init__(self, model, messages, system_prompt="", gen_params=None, tools=None, api_key=None):
         super().__init__()
@@ -83,20 +85,54 @@ class BaseAIWorker(QThread):
         self._stop_flag = True
 
     def _prune_messages(self, messages, max_tokens=3500):
-        # Very crude estimation: 1 word = 1.3 tokens average
+        """
+        Prunes messages to fit within max_tokens.
+        Strategy: Keep the first 2 messages (system/initial greeting) and as many recent messages as possible.
+        """
+        if not messages:
+            return []
+            
+        # 1 word ~ 1.5 tokens heuristic
+        def est_tokens(msg):
+            return len(str(msg.get("content", "")).split()) * 1.5 + 20
+
+        # Always try to keep the first 2 messages if they exist
+        first_few = messages[:2] if len(messages) > 2 else []
+        remaining = messages[2:] if len(messages) > 2 else messages
+        
+        first_few_tokens = sum(est_tokens(m) for m in first_few)
+        budget = max_tokens - first_few_tokens - 100 # safety margin
+        
+        if budget < 500: # If first few are too large, just use the latest
+            budget = max_tokens - 100
+            first_few = []
+            remaining = messages
+
+        pruned_recent = []
         current_tokens = 0
-        pruned = []
-        for msg in reversed(messages):
-            tokens = len(msg.get("content", "").split()) * 1.5
-            if current_tokens + tokens < max_tokens:
-                pruned.insert(0, msg)
+        for msg in reversed(remaining):
+            tokens = est_tokens(msg)
+            if current_tokens + tokens < budget:
+                pruned_recent.insert(0, msg)
                 current_tokens += tokens
             else:
                 break
-        return pruned
+                
+        return first_few + pruned_recent
 
     def run(self):
         raise NotImplementedError("Subclasses must implement run()")
+
+    def _is_truncated(self, text, finish_reason):
+        """Check if response was cut off."""
+        if finish_reason == "length":
+            return True
+        # Heuristic: ends mid-word or mid-sentence for substantial responses
+        stripped = text.rstrip()
+        if stripped and stripped[-1] not in '.!?"\')]}':
+            if len(stripped) > 100:
+                return True
+        return False
 
 class OllamaWorker(BaseAIWorker):
     _models_without_tool_support = set()
@@ -199,6 +235,8 @@ class OllamaWorker(BaseAIWorker):
                         msg_chunk = chunk["message"]
                         if "content" in msg_chunk:
                             token = msg_chunk["content"]; full_text += token; self.token_received.emit(token)
+                            delay = self.gen_params.get("streaming_delay", 0.0)
+                            if delay > 0: time.sleep(delay)
                         if "tool_calls" in msg_chunk: tool_calls.extend(msg_chunk["tool_calls"])
                     
                     if chunk.get("done"):
@@ -208,6 +246,8 @@ class OllamaWorker(BaseAIWorker):
                             "eval_duration": chunk.get("eval_duration", 0),
                             "prompt_eval_count": chunk.get("prompt_eval_count", 0)
                         }
+                        if chunk.get("done_reason") == "length" or self._is_truncated(full_text, chunk.get("done_reason")):
+                            self.truncated.emit()
             
             if tool_calls:
                 self.tool_calls_received.emit(tool_calls)
@@ -282,6 +322,105 @@ class OpenAIWorker(BaseAIWorker):
                                 if "function" in tc:
                                     if "name" in tc["function"]: tool_calls_map[idx]["function"]["name"] += tc["function"]["name"]
                                     if "arguments" in tc["function"]: tool_calls_map[idx]["function"]["arguments"] += tc["function"]["arguments"]
+                        
+                        if choices[0].get("finish_reason") == "length" or self._is_truncated(full_text, choices[0].get("finish_reason")):
+                            self.truncated.emit()
+                    except Exception: continue
+
+            if tool_calls_map:
+                tool_calls = list(tool_calls_map.values())
+                self.tool_calls_received.emit(tool_calls)
+                if not full_text.strip(): return
+
+            stats = {
+                "prompt_tokens": usage.get("prompt_tokens", 0),
+                "completion_tokens": usage.get("completion_tokens", 0),
+                "total_tokens": usage.get("total_tokens", 0)
+            }
+            self.response_finished.emit(full_text, stats)
+        except Exception as e:
+            self.error_occurred.emit(str(e))
+
+class OpenRouterWorker(OpenAIWorker):
+    def run(self):
+        try:
+            api_messages = []
+            if self.system_prompt:
+                api_messages.append({"role": "system", "content": self.system_prompt})
+            
+            pruned_history = self._prune_messages(self.messages, max_tokens=128000)
+            for msg in pruned_history:
+                role = msg.get("role")
+                if role == "tool_results":
+                    for result in msg.get("tool_results", []):
+                        api_messages.append({"role": "tool", "content": str(result.get("content", "")), "tool_call_id": result.get("id")})
+                    continue
+                if role not in ALLOWED_ROLES: continue
+                entry = {"role": role, "content": str(msg.get("content", ""))}
+                if msg.get("tool_calls"): entry["tool_calls"] = msg["tool_calls"]
+                api_messages.append(entry)
+
+            payload = {
+                "model": self.model, 
+                "messages": api_messages, 
+                "stream": True,
+                # OpenRouter specific: show up in their rankings
+                "headers": {
+                    "HTTP-Referer": "https://github.com/jacobdcook/synapse",
+                    "X-Title": "Synapse Desktop"
+                }
+            }
+            if self.tools: payload["tools"] = self.tools
+            if "temperature" in self.gen_params: payload["temperature"] = self.gen_params["temperature"]
+
+            req = urllib.request.Request(
+                "https://openrouter.ai/api/v1/chat/completions",
+                data=json.dumps(payload).encode(),
+                headers={
+                    "Content-Type": "application/json", 
+                    "Authorization": f"Bearer {self.api_key}",
+                    "HTTP-Referer": "https://github.com/jacobdcook/synapse",
+                    "X-Title": "Synapse Desktop"
+                }
+            )
+
+            full_text = ""
+            tool_calls_map = {}
+            usage = {}
+
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                for line in resp:
+                    if self._stop_flag: break
+                    line = line.decode().strip()
+                    if not line.startswith("data: "): continue
+                    if line == "data: [DONE]": break
+                    
+                    try:
+                        chunk = json.loads(line[6:])
+                        if "usage" in chunk and chunk["usage"]:
+                            usage = chunk["usage"]
+                        
+                        choices = chunk.get("choices", [])
+                        if not choices: continue
+                        delta = choices[0].get("delta", {})
+                        
+                        if "content" in delta and delta["content"]:
+                            token = delta["content"]
+                            full_text += token
+                            self.token_received.emit(token)
+                        
+                        if "tool_calls" in delta:
+                            for tc in delta["tool_calls"]:
+                                idx = tc.get("index", 0)
+                                if idx not in tool_calls_map:
+                                    tool_calls_map[idx] = {"id": tc.get("id"), "type": "function", "function": {"name": "", "arguments": ""}}
+                                if "id" in tc: tool_calls_map[idx]["id"] = tc["id"]
+                                if "function" in tc:
+                                    if "name" in tc["function"]: tool_calls_map[idx]["function"]["name"] += tc["function"]["name"]
+                                    if "arguments" in tc["function"]: tool_calls_map[idx]["function"]["arguments"] += tc["function"]["arguments"]
+                        
+                        if choices[0].get("finish_reason") == "length" or self._is_truncated(full_text, choices[0].get("finish_reason")):
+                            self.truncated.emit()
                     except Exception: continue
 
             if tool_calls_map:
@@ -398,8 +537,11 @@ class AnthropicWorker(BaseAIWorker):
                             delta = chunk.get("delta", {})
                             if delta.get("type") == "text_delta":
                                 token = delta.get("text", "")
-                                full_text += token
-                                self.token_received.emit(token)
+                                if token: 
+                                    full_text += token
+                                    self.token_received.emit(token)
+                                    delay = self.gen_params.get("streaming_delay", 0.0)
+                                    if delay > 0: time.sleep(delay)
                             elif delta.get("type") == "input_json_delta":
                                 current_tool_input += delta.get("partial_json", "")
                                 
@@ -411,6 +553,9 @@ class AnthropicWorker(BaseAIWorker):
                                     "function": {"name": current_tool_name, "arguments": current_tool_input}
                                 })
                                 current_tool_id = None
+                        
+                        if chunk.get("delta", {}).get("stop_reason") == "max_tokens" or (ctype == "message_stop" and self._is_truncated(full_text, chunk.get("message", {}).get("stop_reason"))):
+                            self.truncated.emit()
                     except Exception: continue
 
             if tool_calls:
@@ -431,6 +576,8 @@ def WorkerFactory(model, messages, system_prompt="", gen_params=None, tools=None
         return OpenAIWorker(model, messages, system_prompt, gen_params, tools, settings.get("openai_key"))
     elif model.startswith("claude-"):
         return AnthropicWorker(model, messages, system_prompt, gen_params, tools, settings.get("anthropic_key"))
+    elif "/" in model and ":" not in model: # OpenRouter models usually have 'provider/name'
+        return OpenRouterWorker(model, messages, system_prompt, gen_params, tools, settings.get("openrouter_key"))
     else:
         return OllamaWorker(model, messages, system_prompt, gen_params, tools)
 
@@ -517,8 +664,159 @@ class TitleWorker(QThread):
 
             if title and len(title) < 80:
                 self.title_ready.emit(self.conv_id, title)
+            elif self.model.startswith("claude-") or ("/" in self.model and ":" not in self.model):
+                # OpenRouter fallback or Claude
+                payload = {
+                    "model": self.model,
+                    "messages": [{"role": m["role"], "content": m.get("content", "")} for m in summary_msgs if m.get("role") in ALLOWED_ROLES and m["role"] != "system"],
+                    "stream": False,
+                    "temperature": 0.3
+                }
+                if "/" in self.model: # OpenRouter
+                    url = "https://openrouter.ai/api/v1/chat/completions"
+                    key = self.settings.get("openrouter_key")
+                else: # Anthropic
+                    url = "https://api.anthropic.com/v1/messages"
+                    key = self.settings.get("anthropic_key")
+                    payload["max_tokens"] = 100
+                    system_msg = next((m["content"] for m in summary_msgs if m["role"] == "system"), "")
+                    if system_msg: payload["system"] = system_msg
+
+                req = urllib.request.Request(
+                    url,
+                    data=json.dumps(payload).encode(),
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {key}" if "/" in self.model else None,
+                        "x-api-key": key if "anthropic" in url else None,
+                        "anthropic-version": "2023-06-01" if "anthropic" in url else None
+                    }
+                )
+                headers = {"Content-Type": "application/json"}
+                if "/" in self.model: headers["Authorization"] = f"Bearer {key}"
+                else: 
+                    headers["x-api-key"] = key
+                    headers["anthropic-version"] = "2023-06-01"
+                
+                req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=headers)
+
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    data = json.loads(resp.read())
+                    if "/" in self.model: # OpenRouter / OpenAI format
+                        title = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip().strip('"').strip("'")
+                    else: # Anthropic format
+                        title = data.get("content", [{}])[0].get("text", "").strip().strip('"').strip("'")
+                
+                if title and len(title) < 80:
+                    self.title_ready.emit(self.conv_id, title)
+
         except Exception as e:
             log.warning(f"Auto-title failed: {e}")
+
+
+class SummaryWorker(QThread):
+    summary_ready = pyqtSignal(str, str)
+
+    def __init__(self, model, conv_id, messages, settings=None):
+        super().__init__()
+        self.model = model
+        self.conv_id = conv_id
+        self.messages = messages
+        self.settings = settings or {}
+
+    def run(self):
+        try:
+            # Prepare summary prompt
+            summary_msgs = [
+                {"role": "system", "content": "You are a helpful assistant. Provide a concise, 1-2 sentence executive summary of this conversation so far. Focus on the main topic and any decisions made."},
+            ]
+            # Include a representative sample of the conversation
+            if len(self.messages) > 10:
+                summary_msgs.extend(list(self.messages)[:4])
+                summary_msgs.append({"role": "user", "content": "... [middle of conversation omitted] ..."})
+                summary_msgs.extend(list(self.messages)[-4:])
+            else:
+                summary_msgs.extend(self.messages)
+            
+            summary_msgs.append({"role": "user", "content": "GENERATE SUMMARY NOW."})
+
+            # Use WorkerFactory to create a non-streaming worker logic (simpler via direct call)
+            if self.model.startswith("gpt-"):
+                payload = {
+                    "model": self.model,
+                    "messages": [{"role": m["role"], "content": str(m.get("content", ""))} for m in summary_msgs if m.get("role") in ALLOWED_ROLES],
+                    "stream": False,
+                    "temperature": 0.5
+                }
+                req = urllib.request.Request(
+                    "https://api.openai.com/v1/chat/completions",
+                    data=json.dumps(payload).encode(),
+                    headers={"Content-Type": "application/json", "Authorization": f"Bearer {self.settings.get('openai_key')}"}
+                )
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    data = json.loads(resp.read())
+                    summary = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+            elif self.model.startswith("claude-"):
+                # Simplified Claude hit
+                payload = {
+                    "model": self.model,
+                    "messages": [{"role": m["role"], "content": str(m.get("content", ""))} for m in summary_msgs if m.get("role") in ALLOWED_ROLES and m["role"] != "system"],
+                    "max_tokens": 300,
+                    "stream": False,
+                    "temperature": 0.5
+                }
+                system_msg = next((m["content"] for m in summary_msgs if m["role"] == "system"), "")
+                if system_msg: payload["system"] = system_msg
+                
+                req = urllib.request.Request(
+                    "https://api.anthropic.com/v1/messages",
+                    data=json.dumps(payload).encode(),
+                    headers={
+                        "Content-Type": "application/json", 
+                        "x-api-key": self.settings.get("anthropic_key"),
+                        "anthropic-version": "2023-06-01"
+                    }
+                )
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    data = json.loads(resp.read())
+                    summary = data.get("content", [{}])[0].get("text", "").strip()
+            else:
+                # Ollama fallback
+                payload = json.dumps({
+                    "model": self.model,
+                    "messages": [{"role": m["role"], "content": str(m.get("content", ""))} for m in summary_msgs if m.get("role") in ALLOWED_ROLES],
+                    "stream": False,
+                    "options": {"temperature": 0.5, "num_ctx": 4096}
+                }).encode()
+                req = urllib.request.Request(f"{get_ollama_url()}/api/chat", data=payload, headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    data = json.loads(resp.read())
+                    summary = data.get("message", {}).get("content", "").strip()
+
+            if summary:
+                self.summary_ready.emit(self.conv_id, summary)
+
+        except Exception as e:
+            log.warning(f"Auto-summary failed: {e}")
+
+
+class YouTubeWorker(QThread):
+    finished = pyqtSignal(str, dict, str) # transcript, metadata, error
+
+    def __init__(self, url):
+        super().__init__()
+        self.url = url
+
+    def run(self):
+        try:
+            from ..utils.youtube_handler import YouTubeHandler
+            transcript, metadata = YouTubeHandler.get_transcript(self.url)
+            if transcript:
+                self.finished.emit(transcript, metadata, "")
+            else:
+                self.finished.emit("", {}, metadata or "Unknown error")
+        except Exception as e:
+            self.finished.emit("", {}, str(e))
 
 
 class ConnectionChecker(QThread):
@@ -551,13 +849,33 @@ class ModelLoader(QThread):
             "gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "o1-preview", "o1-mini",
             "claude-3-5-sonnet-20240620", "claude-3-opus-20240229", "claude-3-haiku-20240307"
         ]
+        
+        # Load settings to check for OpenRouter key
+        from ..utils.constants import load_settings
+        settings = load_settings()
+        or_key = settings.get("openrouter_key")
+        
+        if or_key:
+            try:
+                req = urllib.request.Request(
+                    "https://openrouter.ai/api/v1/models",
+                    headers={"Authorization": f"Bearer {or_key}"}
+                )
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    data = json.loads(resp.read())
+                    or_models = [m["id"] for m in data.get("data", [])]
+                    cloud_models.extend(or_models)
+            except Exception as e:
+                log.warning(f"Failed to fetch OpenRouter models: {e}")
+
         try:
             req = urllib.request.Request(f"{get_ollama_url()}/api/tags")
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read())
                 models = [m["name"] for m in data.get("models", [])]
                 models.extend(cloud_models)
-                models.sort()
+                # Deduplicate and sort
+                models = sorted(list(set(models)))
                 self.models_loaded.emit(models)
         except Exception:
-            self.models_loaded.emit(cloud_models + ["llama3.2:3b"])
+            self.models_loaded.emit(sorted(list(set(cloud_models + ["llama3.2:3b"]))))

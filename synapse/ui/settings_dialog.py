@@ -11,7 +11,7 @@ from ..utils.constants import (
     DEFAULT_GEN_PARAMS, DEFAULT_OLLAMA_URL, DEFAULT_SHORTCUTS,
     load_settings, save_settings
 )
-from ..utils.themes import THEMES
+from ..utils.themes import get_all_themes
 
 log = logging.getLogger(__name__)
 
@@ -34,6 +34,7 @@ class SettingsDialog(QDialog):
         self.tabs.addTab(self._build_advanced_tab(), "Advanced")
         self.tabs.addTab(self._build_mcp_tab(), "MCP")
         self.tabs.addTab(self._build_providers_tab(), "Providers")
+        self.tabs.addTab(self._build_voice_tab(), "Voice")
         self.tabs.addTab(self._build_shortcuts_tab(), "Shortcuts")
         layout.addWidget(self.tabs)
 
@@ -52,12 +53,16 @@ class SettingsDialog(QDialog):
         w = QWidget()
         layout = QFormLayout(w)
 
+        self.auto_title_check = QCheckBox("Auto-generate chat titles")
+        self.auto_title_check.setChecked(self.settings_data.get("auto_title", True))
+        layout.addRow(self.auto_title_check)
+
         self.ollama_url = QLineEdit(self.settings_data.get("ollama_url", DEFAULT_OLLAMA_URL))
         layout.addRow("Ollama URL:", self.ollama_url)
 
-        self.auto_title_check = QCheckBox("Auto-title conversations")
-        self.auto_title_check.setChecked(self.settings_data.get("auto_title", True))
-        layout.addRow(self.auto_title_check)
+        self.auto_summary_check = QCheckBox("Auto-summarize long conversations")
+        self.auto_summary_check.setChecked(self.settings_data.get("auto_summary", True))
+        layout.addRow(self.auto_summary_check)
 
         self.notification_check = QCheckBox("Sound on completion")
         self.notification_check.setChecked(self.settings_data.get("notification_sound", False))
@@ -66,6 +71,10 @@ class SettingsDialog(QDialog):
         self.auto_exec_check = QCheckBox("Frictionless mode (auto-approve tools)")
         self.auto_exec_check.setChecked(self.settings_data.get("auto_exec", False))
         layout.addRow(self.auto_exec_check)
+
+        self.auto_continue_check = QCheckBox("Auto-continue truncated responses")
+        self.auto_continue_check.setChecked(self.settings_data.get("auto_continue", True))
+        layout.addRow(self.auto_continue_check)
 
         layout.addRow(QLabel("<hr>"))
         rerun_btn = QPushButton("Re-run Onboarding Wizard")
@@ -119,7 +128,7 @@ class SettingsDialog(QDialog):
         layout = QFormLayout(w)
 
         self.theme_combo = QComboBox()
-        self.theme_combo.addItems(THEMES.keys())
+        self.theme_combo.addItems(get_all_themes().keys())
         current_theme = self.settings_data.get("theme", "One Dark")
         idx = self.theme_combo.findText(current_theme)
         if idx >= 0:
@@ -169,6 +178,10 @@ class SettingsDialog(QDialog):
         self.anthropic_key = QLineEdit(self.settings_data.get("anthropic_key", ""))
         self.anthropic_key.setEchoMode(QLineEdit.Password)
         layout.addRow("Anthropic API Key:", self.anthropic_key)
+
+        self.openrouter_key = QLineEdit(self.settings_data.get("openrouter_key", ""))
+        self.openrouter_key.setEchoMode(QLineEdit.Password)
+        layout.addRow("OpenRouter API Key:", self.openrouter_key)
 
         return w
 
@@ -397,11 +410,66 @@ class SettingsDialog(QDialog):
             for action_id, edit in self._shortcut_edits.items():
                 edit.setKeySequence(DEFAULT_SHORTCUTS[action_id])
 
+    def _build_voice_tab(self):
+        w = QWidget()
+        layout = QVBoxLayout(w)
+        
+        form_group = QGroupBox("Voice Configuration")
+        form_layout = QFormLayout(form_group)
+        
+        self.whisper_model_combo = QComboBox()
+        self.whisper_model_combo.addItems(["tiny", "base", "small", "medium", "large-v3"])
+        voice_settings = self.settings_data.get("voice", {})
+        if not isinstance(voice_settings, dict): voice_settings = {}
+        current_model = voice_settings.get("whisper_model", "base")
+        self.whisper_model_combo.setCurrentText(str(current_model))
+        form_layout.addRow("Whisper Model:", self.whisper_model_combo)
+        
+        self.tts_voice_combo = QComboBox()
+        # Common edge-tts voices
+        voices = ["en-US-AndrewNeural", "en-US-AvaNeural", "en-GB-SoniaNeural", "en-AU-NatashaNeural"]
+        self.tts_voice_combo.addItems(voices)
+        current_voice = voice_settings.get("tts_voice", "en-US-AndrewNeural")
+        self.tts_voice_combo.setCurrentText(str(current_voice))
+        form_layout.addRow("TTS Voice:", self.tts_voice_combo)
+        
+        self.vad_threshold_spin = QSpinBox()
+        self.vad_threshold_spin.setRange(1, 100)
+        self.vad_threshold_spin.setSuffix("%")
+        val = int(voice_settings.get("vad_threshold", 0.01) * 1000)
+        self.vad_threshold_spin.setValue(val)
+        form_layout.addRow("VAD Sensitivity:", self.vad_threshold_spin)
+        
+        self.silence_timeout_spin = QSpinBox()
+        self.silence_timeout_spin.setRange(5, 50) # 0.5s to 5.0s
+        self.silence_timeout_spin.setValue(int(voice_settings.get("silence_timeout", 1.5) * 10))
+        self.silence_timeout_spin.setSuffix(" x 0.1s")
+        form_layout.addRow("Silence Timeout:", self.silence_timeout_spin)
+        
+        layout.addWidget(form_group)
+        
+        manage_btn = QPushButton("Manage Whisper Models")
+        manage_btn.clicked.connect(self._open_whisper_manager)
+        layout.addWidget(manage_btn)
+        
+        layout.addStretch()
+        return w
+
+    def _open_whisper_manager(self):
+        from .whisper_manager import WhisperManagerPanel
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Whisper Model Manager")
+        dlg.resize(800, 500)
+        l = QVBoxLayout(dlg)
+        l.addWidget(WhisperManagerPanel())
+        dlg.exec_()
+
     def _save(self):
         self.settings_data["ollama_url"] = self.ollama_url.text().strip()
         self.settings_data["auto_title"] = self.auto_title_check.isChecked()
         self.settings_data["notification_sound"] = self.notification_check.isChecked()
         self.settings_data["auto_exec"] = self.auto_exec_check.isChecked()
+        self.settings_data["auto_continue"] = self.auto_continue_check.isChecked()
         self.settings_data["gen_params"] = {
             "temperature": self.temp_slider.value() / 100,
             "top_p": self.top_p_slider.value() / 100,
@@ -416,6 +484,7 @@ class SettingsDialog(QDialog):
 
         self.settings_data["openai_key"] = self.openai_key.text()
         self.settings_data["anthropic_key"] = self.anthropic_key.text()
+        self.settings_data["openrouter_key"] = self.openrouter_key.text()
 
         # Save Shortcuts
         new_shortcuts = {}
@@ -423,6 +492,15 @@ class SettingsDialog(QDialog):
             for aid, edit in self._shortcut_edits.items():
                 new_shortcuts[aid] = edit.keySequence().toString()
             self.settings_data["shortcuts"] = new_shortcuts
+
+        self.settings_data["voice"] = {
+            "whisper_model": self.whisper_model_combo.currentText(),
+            "tts_voice": self.tts_voice_combo.currentText(),
+            "vad_threshold": self.vad_threshold_spin.value() / 1000.0,
+            "silence_timeout": self.silence_timeout_spin.value() / 10.0,
+        }
+
+        self.settings_data["auto_summary"] = self.auto_summary_check.isChecked()
 
         save_settings(self.settings_data)
         self.settings_changed.emit(self.settings_data)

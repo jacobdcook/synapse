@@ -22,6 +22,7 @@ class ImageGenWorker(QThread):
         super().__init__()
         self.provider = provider
         self.params = params
+        self._stop_flag = False
 
     def run(self):
         try:
@@ -29,6 +30,8 @@ class ImageGenWorker(QThread):
                 result = self._run_sd()
             elif self.provider == "comfy":
                 result = self._run_comfy()
+            elif self.provider == "openai":
+                result = self._run_openai()
             else:
                 result = {"success": False, "error": f"Unknown provider: {self.provider}"}
             
@@ -78,6 +81,59 @@ class ImageGenWorker(QThread):
                 "prompt": payload["prompt"],
                 "provider": "Stable Diffusion"
             }
+
+    def _run_openai(self):
+        """OpenAI DALL-E 3 implementation."""
+        api_key = self.params.get("api_key")
+        if not api_key:
+            return {"success": False, "error": "OpenAI API Key not found in settings. Please add it to the 'Providers' tab."}
+
+        endpoint = "https://api.openai.com/v1/images/generations"
+        payload = {
+            "model": "dall-e-3",
+            "prompt": self.params.get("prompt", ""),
+            "n": 1,
+            "size": "1024x1024"
+        }
+
+        req = urllib.request.Request(
+            endpoint,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}"
+            }
+        )
+
+        try:
+            with urllib.request.urlopen(req, timeout=120) as response:
+                data = json.loads(response.read().decode("utf-8"))
+                img_url = data["data"][0]["url"]
+                
+                # Download the image
+                with urllib.request.urlopen(img_url, timeout=60) as img_resp:
+                    img_data = img_resp.read()
+                
+                filename = f"dalle_{uuid.uuid4().hex[:8]}.png"
+                filepath = GEN_DIR / filename
+                with open(filepath, "wb") as f:
+                    f.write(img_data)
+                
+                return {
+                    "success": True,
+                    "path": str(filepath),
+                    "prompt": payload["prompt"],
+                    "provider": "DALL-E 3"
+                }
+        except urllib.error.HTTPError as e:
+            err_data = e.read().decode()
+            try:
+                msg = json.loads(err_data)["error"]["message"]
+            except:
+                msg = str(e)
+            return {"success": False, "error": f"OpenAI Error: {msg}"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
     def _run_comfy(self):
         """ComfyUI API — builds a minimal txt2img workflow and polls for result."""

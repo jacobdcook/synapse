@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 from PyQt5.QtCore import QObject, pyqtSignal
 from .memory import MemoryManager
+from .code_executor import CodeExecutor
 
 log = logging.getLogger(__name__)
 
@@ -51,6 +52,7 @@ class ToolExecutor(QObject):
         self.workspace_dir = Path(workspace_dir) if workspace_dir else None
         self.registry = ToolRegistry()
         self.memory = MemoryManager()
+        self.code_executor = CodeExecutor(workspace_dir)
         self._setup_default_tools()
 
     def _setup_default_tools(self):
@@ -180,6 +182,18 @@ class ToolExecutor(QObject):
                     "cfg_scale": {"type": "number", "description": "CFG guidance scale (default 7)."}
                 },
                 "required": ["prompt"]
+            }
+        )
+        self.registry.register(
+            "execute_python",
+            self._execute_python,
+            "Run Python code and get the output. Supports matplotlib plots which are returned as base64 images.",
+            {
+                "type": "object",
+                "properties": {
+                    "code": {"type": "string", "description": "The Python code to execute."}
+                },
+                "required": ["code"]
             }
         )
 
@@ -333,6 +347,23 @@ class ToolExecutor(QObject):
         if result.get("success"):
             return f"Image generated successfully!\nSaved to: {result['path']}\n![Generated Image](file://{result['path']})"
         return f"Image generation failed: {result.get('error', 'Unknown error')}"
+
+    def _execute_python(self, code):
+        """Execute Python code and return results including images."""
+        res = self.code_executor.execute_python(code)
+        
+        output = f"Exit code {res['exit_code']}\n"
+        if res['stdout']:
+            output += f"STDOUT:\n{res['stdout']}\n"
+        if res['stderr']:
+            output += f"STDERR:\n{res['stderr']}\n"
+            
+        if res['images']:
+            output += f"\nGenerated {len(res['images'])} plots:\n"
+            for i, img_b64 in enumerate(res['images']):
+                output += f"![Plot {i}](data:image/png;base64,{img_b64})\n"
+                
+        return output.strip() or "Execution finished with no output."
 
     def request_approval(self, name, arguments):
         # In a real app, this would show a dialog.

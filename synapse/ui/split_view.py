@@ -12,7 +12,7 @@ log = logging.getLogger(__name__)
 
 class ChatPane(QWidget):
     """A single chat panel within the SplitView."""
-    action_requested = pyqtSignal(str, int) # action, index
+    action_requested = pyqtSignal(str, object) # action, index/data
     model_changed = pyqtSignal(str)
     voted = pyqtSignal(int)
 
@@ -51,7 +51,7 @@ class ChatPane(QWidget):
         # Web view with ChatPage for action:// link interception
         self.view = QWebEngineView()
         self._page = ChatPage(self.view)
-        self._page.action_requested.connect(lambda action, data: self.action_requested.emit(action, data if isinstance(data, int) else -1))
+        self._page.action_requested.connect(self.action_requested.emit)
         self.view.setPage(self._page)
         self.layout.addWidget(self.view)
 
@@ -63,13 +63,28 @@ class ChatPane(QWidget):
 
 class SplitViewWidget(QSplitter):
     """Manages multiple ChatPanes in a split layout."""
-    action_requested = pyqtSignal(int, str, int) # pane_index, action, msg_index
+    action_requested = pyqtSignal(int, str, object) # pane_index, action, msg_index/data
     voted = pyqtSignal(int, int) # pane_index, msg_index
 
     def __init__(self, parent=None):
         super().__init__(Qt.Horizontal, parent)
         self.setHandleWidth(2)
         self.panes = []
+        self._available_models = []
+
+    def set_available_models(self, models):
+        self._available_models = models
+
+    def set_panes(self, model_list):
+        # Clear existing
+        for p in self.panes:
+            p.setParent(None)
+            p.deleteLater()
+        self.panes = []
+        
+        # Add new
+        for m in model_list:
+            self.add_pane(self._available_models, m)
 
     def add_pane(self, models, current_model=None):
         if len(self.panes) >= 4:

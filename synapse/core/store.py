@@ -28,6 +28,7 @@ class ConversationStore:
                         "model": data.get("model", DEFAULT_MODEL),
                         "pinned": data.get("pinned", False),
                         "tags": data.get("tags", []),
+                        "folder": data.get("folder", "General"),
                     })
             except (json.JSONDecodeError, KeyError) as e:
                 log.warning(f"Skipping corrupted conversation file {f}: {e}")
@@ -54,6 +55,7 @@ class ConversationStore:
 
         conversation["updated_at"] = datetime.now(timezone.utc).isoformat()
         # Ensure all messages have IDs for branching
+        total_tokens = 0
         if "messages" in conversation:
             if "history" not in conversation:
                 conversation["history"] = []
@@ -65,11 +67,20 @@ class ConversationStore:
                 if "parent_id" not in msg:
                     msg["parent_id"] = last_id
                 
+                content = str(msg.get("content", ""))
+                total_tokens += len(content.split()) * 1.5 + 20
+                
                 # Add to history if not present
                 if not any(m.get("id") == msg["id"] for m in conversation["history"]):
                     conversation["history"].append(msg)
                     
                 last_id = msg["id"]
+        
+        conversation["stats"] = {
+            "message_count": len(conversation.get("messages", [])),
+            "total_tokens": int(total_tokens),
+            "last_updated": datetime.now(timezone.utc).isoformat()
+        }
         
         path = CONV_DIR / f"{conversation['id']}.json"
         with open(path, "w") as f:
@@ -99,6 +110,26 @@ class ConversationStore:
                         break
         return results
 
+    def move_to_folder(self, conv_id, folder_name):
+        conv = self.load(conv_id)
+        if conv:
+            conv["folder"] = folder_name
+            self.save(conv)
+            return True
+        return False
+
+    def add_tag(self, conv_id, tag):
+        conv = self.load(conv_id)
+        if conv:
+            tags = conv.get("tags", [])
+            tag = tag.strip().lstrip("#")
+            if tag and tag not in tags:
+                tags.append(tag)
+                conv["tags"] = tags
+                self.save(conv)
+                return True
+        return False
+
 def new_conversation(model=DEFAULT_MODEL, system_prompt=DEFAULT_SYSTEM_PROMPT):
     return {
         "id": str(uuid.uuid4()),
@@ -110,4 +141,6 @@ def new_conversation(model=DEFAULT_MODEL, system_prompt=DEFAULT_SYSTEM_PROMPT):
         "messages": [],
         "history": [], # To store all branched messages
         "pinned": False,
+        "folder": "General",
+        "tags": [],
     }

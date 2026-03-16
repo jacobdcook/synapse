@@ -28,6 +28,8 @@ class ActivityBar(QWidget):
         self._add_action("\u22d4", 8, "Branch Tree")
         self._add_action("\U0001f552", 9, "Schedules")
         self._add_action("\U0001f3a8", 10, "Image Generation")
+        self._add_action("\u21c4", 11, "Workflows")
+        self._add_action("\U0001f516", 12, "Bookmarks")
 
         layout.addStretch()
 
