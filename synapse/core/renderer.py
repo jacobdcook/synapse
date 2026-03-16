@@ -18,7 +18,30 @@ class ChatRenderer:
 
     def render_markdown(self, text, code_block_offset=0):
         self.md.reset()
+
+        # Extract <think> blocks before markdown conversion
+        think_blocks = []
+        def _extract_think(match):
+            think_blocks.append(match.group(1).strip())
+            return ""
+        text = re.sub(r'<think>(.*?)</think>', _extract_think, text, flags=re.DOTALL)
+
         html = self.md.convert(text)
+
+        # Prepend collapsible thinking blocks
+        if think_blocks:
+            for i, block in enumerate(think_blocks):
+                think_html = html_module.escape(block).replace("\n", "<br>")
+                tid = f"think-{id(text)}-{i}"
+                html = (
+                    f'<div class="think-block">'
+                    f'<div class="think-header" onclick="toggleThink(\'{tid}\')">'
+                    f'<span class="think-chevron" id="thinkchev-{tid}">&#9654;</span> Thinking&hellip;'
+                    f'</div>'
+                    f'<div class="think-body" id="thinkbody-{tid}">{think_html}</div>'
+                    f'</div>'
+                ) + html
+
         self._code_idx = code_block_offset
 
         def _code_block_replace(match):
@@ -38,8 +61,14 @@ class ChatRenderer:
             ci = self._code_idx
             self._code_idx += 1
 
+            lang_lower = lang.lower()
+            preview_btn = ""
+            if lang_lower in ('html', 'svg', 'xml', 'react', 'jsx', 'tsx', 'javascript', 'js'):
+                # Artifact-capable language
+                preview_btn = f'<button class="cb-btn cb-preview" onclick="window.location.href=\'action://previewartifact/{ci}\'">&#128065; Preview</button>'
+
             run_btn = ""
-            if lang.lower() in ('python', 'python3', 'py'):
+            if lang_lower in ('python', 'python3', 'py'):
                 run_btn = f'<button class="cb-btn cb-run" onclick="window.location.href=\'action://runcode/{ci}\'">&#9654; Run</button>'
 
             btns = (
@@ -47,6 +76,7 @@ class ChatRenderer:
                 f'<button class="cb-btn" onclick="window.location.href=\'action://applycode/{ci}\'">Apply</button>'
                 f'<button class="cb-btn" onclick="window.location.href=\'action://proposecode/{ci}\'">Propose</button>'
                 f'<button class="cb-btn" onclick="window.location.href=\'action://savecode/{ci}\'">Save</button>'
+                f'{preview_btn}'
                 f'{run_btn}'
             )
 
@@ -73,7 +103,8 @@ class ChatRenderer:
 
         return html
 
-    def build_html(self, messages, model_name="", available_models=None):
+    def build_html(self, messages, history=None, model_name="", available_models=None):
+        history = history or []
         msgs_html = ""
         if not messages:
             msgs_html = self._build_welcome()
@@ -171,7 +202,7 @@ class ChatRenderer:
                     f'<div class="msg {role}">'
                     f'  <div class="msg-gutter">{avatar}</div>'
                     f'  <div class="msg-body">'
-                    f'    <div class="msg-head"><span class="msg-name">{label}</span>{time_html}</div>'
+                    f'    <div class="msg-head"><span class="msg-name">{label}</span>{time_html}{self._branch_navigation(idx, msg, history)}</div>'
                     f'    {images_html}{files_html}'
                     f'    <div class="msg-content">{rendered}</div>'
                     f'    {meta}'
@@ -213,6 +244,32 @@ class ChatRenderer:
             f'<button id="rawbtn-{idx}" onclick="toggleRaw({idx})">Raw</button>'
             f'<button onclick="window.location.href=\'action://bookmark/{idx}\'">{bm}</button>'
             f'{cont}'
+        )
+
+    @staticmethod
+    def _branch_navigation(idx, msg, history):
+        parent_id = msg.get("parent_id")
+        msg_id = msg.get("id")
+        if not history or not msg_id:
+            return ""
+
+        # Find all messages with same parent
+        siblings = [m for m in history if m.get("parent_id") == parent_id]
+        if len(siblings) <= 1:
+            return ""
+
+        # Find current index among siblings
+        try:
+            current_idx = next(i for i, s in enumerate(siblings) if s.get("id") == msg_id)
+        except StopIteration:
+            return ""
+
+        return (
+            f'<div class="branch-switcher">'
+            f'  <span class="br-btn" onclick="window.location.href=\'action://navbranch/{idx}/prev\'">&lt;</span>'
+            f'  <span class="br-info">{current_idx + 1} / {len(siblings)}</span>'
+            f'  <span class="br-btn" onclick="window.location.href=\'action://navbranch/{idx}/next\'">&gt;</span>'
+            f'</div>'
         )
 
     @staticmethod
@@ -270,3 +327,16 @@ class ChatRenderer:
             '</div>'
             '</div>'
         )
+
+    def build_loading_html(self):
+        template = CHAT_HTML_TEMPLATE.replace("PYGMENTS_CSS", self.pygments_css)
+        template = template.replace("FONT_SIZE_VAL", str(self.font_size))
+        skeleton = (
+            '<div class="welcome" style="opacity:0.5">'
+            '<div class="skeleton-line" style="width:60%;height:18px;margin:24px auto 12px;background:#333;border-radius:4px;animation:pulse 1.2s infinite"></div>'
+            '<div class="skeleton-line" style="width:80%;height:14px;margin:8px auto;background:#2a2a2a;border-radius:4px;animation:pulse 1.2s infinite"></div>'
+            '<div class="skeleton-line" style="width:70%;height:14px;margin:8px auto;background:#2a2a2a;border-radius:4px;animation:pulse 1.2s infinite"></div>'
+            '</div>'
+            '<style>@keyframes pulse{0%,100%{opacity:0.4}50%{opacity:1}}</style>'
+        )
+        return template.replace("MESSAGES_HTML", skeleton)

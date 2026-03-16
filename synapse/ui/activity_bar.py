@@ -20,7 +20,14 @@ class ActivityBar(QWidget):
         self._add_action("\u2630", 0, "Explorer")
         self._add_action("\u2709", 1, "Chat")
         self._add_action("\u2b07", 2, "Models")
-        self._add_action("\u2756", 3, "Git")
+        self._add_action("\U0001f4cb", 3, "Plan") # Clipboard icon
+        self._add_action("\u2756", 4, "Git")
+        self._add_action("\u26c4", 5, "Knowledge")
+        self._add_action("\u270f", 6, "Templates") # Pencil icon
+        self._add_action("\U0001f4ca", 7, "Analytics") # Bar chart icon
+        self._add_action("\u22d4", 8, "Branch Tree")
+        self._add_action("\U0001f552", 9, "Schedules")
+        self._add_action("\U0001f3a8", 10, "Image Generation")
 
         layout.addStretch()
 

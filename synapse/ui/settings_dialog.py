@@ -3,11 +3,13 @@ from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTabWidget, QWidget,
     QPushButton, QLabel, QSlider, QSpinBox, QLineEdit,
     QComboBox, QCheckBox, QGroupBox, QFormLayout, QListWidget,
-    QListWidgetItem, QMessageBox
+    QListWidgetItem, QMessageBox, QTableWidget, QTableWidgetItem,
+    QKeySequenceEdit, QHeaderView
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from ..utils.constants import (
-    DEFAULT_GEN_PARAMS, DEFAULT_OLLAMA_URL, load_settings, save_settings
+    DEFAULT_GEN_PARAMS, DEFAULT_OLLAMA_URL, DEFAULT_SHORTCUTS,
+    load_settings, save_settings
 )
 from ..utils.themes import THEMES
 
@@ -30,7 +32,9 @@ class SettingsDialog(QDialog):
         self.tabs.addTab(self._build_model_tab(), "Models")
         self.tabs.addTab(self._build_appearance_tab(), "Appearance")
         self.tabs.addTab(self._build_advanced_tab(), "Advanced")
-        self.tabs.addTab(self._build_mcp_tab(), "MCP Servers")
+        self.tabs.addTab(self._build_mcp_tab(), "MCP")
+        self.tabs.addTab(self._build_providers_tab(), "Providers")
+        self.tabs.addTab(self._build_shortcuts_tab(), "Shortcuts")
         layout.addWidget(self.tabs)
 
         btn_row = QHBoxLayout()
@@ -63,7 +67,18 @@ class SettingsDialog(QDialog):
         self.auto_exec_check.setChecked(self.settings_data.get("auto_exec", False))
         layout.addRow(self.auto_exec_check)
 
+        layout.addRow(QLabel("<hr>"))
+        rerun_btn = QPushButton("Re-run Onboarding Wizard")
+        rerun_btn.clicked.connect(self._rerun_onboarding)
+        layout.addRow("Setup:", rerun_btn)
+
         return w
+
+    def _rerun_onboarding(self):
+        self.settings_data["onboarding_complete"] = False
+        save_settings(self.settings_data)
+        QMessageBox.information(self, "Onboarding", "Onboarding flag reset. Please restart Synapse or the wizard will trigger if you hit Save.")
+        self.accept()
 
     def _build_model_tab(self):
         w = QWidget()
@@ -140,6 +155,20 @@ class SettingsDialog(QDialog):
         info = QLabel("Changes take effect after restart for some settings.")
         info.setStyleSheet("color: #8b949e; font-size: 11px;")
         layout.addRow(info)
+
+        return w
+
+    def _build_providers_tab(self):
+        w = QWidget()
+        layout = QFormLayout(w)
+
+        self.openai_key = QLineEdit(self.settings_data.get("openai_key", ""))
+        self.openai_key.setEchoMode(QLineEdit.Password)
+        layout.addRow("OpenAI API Key:", self.openai_key)
+
+        self.anthropic_key = QLineEdit(self.settings_data.get("anthropic_key", ""))
+        self.anthropic_key.setEchoMode(QLineEdit.Password)
+        layout.addRow("Anthropic API Key:", self.anthropic_key)
 
         return w
 
@@ -316,6 +345,58 @@ class SettingsDialog(QDialog):
         except Exception as e:
             self.mcp_status_label.setText(f"✗ Error: {str(e)}")
 
+    def _build_shortcuts_tab(self):
+        w = QWidget()
+        layout = QVBoxLayout(w)
+
+        self.shortcut_table = QTableWidget()
+        self.shortcut_table.setColumnCount(3)
+        self.shortcut_table.setHorizontalHeaderLabels(["Action", "Shortcut", ""])
+        self.shortcut_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.shortcut_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Fixed)
+        self.shortcut_table.setColumnWidth(1, 150)
+        self.shortcut_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Fixed)
+        self.shortcut_table.setColumnWidth(2, 60)
+        layout.addWidget(self.shortcut_table)
+
+        self._shortcut_edits = {} # action_id -> QKeySequenceEdit
+        shortcuts = self.settings_data.get("shortcuts", DEFAULT_SHORTCUTS)
+        
+        row = 0
+        for action_id, default_key in DEFAULT_SHORTCUTS.items():
+            current_key = shortcuts.get(action_id, default_key)
+            self.shortcut_table.insertRow(row)
+            
+            # Action Label
+            label = action_id.replace("_", " ").title()
+            self.shortcut_table.setItem(row, 0, QTableWidgetItem(label))
+            
+            # Key Edit
+            edit = QKeySequenceEdit(current_key)
+            self.shortcut_table.setCellWidget(row, 1, edit)
+            self._shortcut_edits[action_id] = edit
+            
+            # Reset button
+            reset_btn = QPushButton("↺")
+            reset_btn.setToolTip("Reset to default")
+            reset_btn.setFixedWidth(40)
+            reset_btn.clicked.connect(lambda checked, aid=action_id, ed=edit: ed.setKeySequence(DEFAULT_SHORTCUTS[aid]))
+            self.shortcut_table.setCellWidget(row, 2, reset_btn)
+            
+            row += 1
+
+        reset_all = QPushButton("Reset All Shortcuts")
+        reset_all.clicked.connect(self._reset_all_shortcuts)
+        layout.addWidget(reset_all)
+
+        return w
+
+    def _reset_all_shortcuts(self):
+        reply = QMessageBox.question(self, "Reset All", "Reset all keyboard shortcuts to defaults?", QMessageBox.Yes|QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            for action_id, edit in self._shortcut_edits.items():
+                edit.setKeySequence(DEFAULT_SHORTCUTS[action_id])
+
     def _save(self):
         self.settings_data["ollama_url"] = self.ollama_url.text().strip()
         self.settings_data["auto_title"] = self.auto_title_check.isChecked()
@@ -332,6 +413,16 @@ class SettingsDialog(QDialog):
         self.settings_data["zoom"] = self.zoom_spin.value()
         self.settings_data["workspace_dir"] = self.workspace_dir.text().strip()
         self.settings_data["mcp_servers"] = self._mcp_servers
+
+        self.settings_data["openai_key"] = self.openai_key.text()
+        self.settings_data["anthropic_key"] = self.anthropic_key.text()
+
+        # Save Shortcuts
+        new_shortcuts = {}
+        if hasattr(self, "_shortcut_edits"):
+            for aid, edit in self._shortcut_edits.items():
+                new_shortcuts[aid] = edit.keySequence().toString()
+            self.settings_data["shortcuts"] = new_shortcuts
 
         save_settings(self.settings_data)
         self.settings_changed.emit(self.settings_data)

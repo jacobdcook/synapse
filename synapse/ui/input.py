@@ -7,8 +7,8 @@ from PyQt5.QtWidgets import (
     QLabel, QSizePolicy, QFileDialog, QFrame, QApplication,
     QListWidget, QListWidgetItem
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QByteArray, QBuffer, QIODevice
-from PyQt5.QtGui import QPixmap, QKeyEvent
+from PyQt5.QtCore import Qt, pyqtSignal, QByteArray, QBuffer, QIODevice, QRect
+from PyQt5.QtGui import QPixmap, QKeyEvent, QPainter, QColor, QBrush, QPen
 from ..utils.constants import IMAGE_EXTENSIONS, TEXT_EXTENSIONS
 
 log = logging.getLogger(__name__)
@@ -75,6 +75,8 @@ class _SlashCompleter(QListWidget):
         ("/export", "Export conversation (md|html|json|pdf)"),
         ("/stats", "Show conversation stats"),
         ("/mcp", "Show/toggle MCP servers"),
+        ("/rag", "Toggle RAG context injection"),
+        ("/memory", "View/clear persistent memory"),
         ("/help", "Show all commands & shortcuts"),
     ]
 
@@ -123,6 +125,46 @@ class _SlashCompleter(QListWidget):
         row = self.currentRow() + direction
         if 0 <= row < self.count():
             self.setCurrentRow(row)
+
+
+class AudioVisualizer(QWidget):
+    """A simple pulsating waveform visualizer for mic input."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(30)
+        self._level = 0.0
+        self._bars = [0.0] * 20
+        self.hide()
+
+    def set_level(self, level):
+        self._level = level
+        # Shift bars and add new value with some randomness for 'life'
+        import random
+        self._bars.pop(0)
+        self._bars.append(level + random.uniform(0, 0.05))
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        spacing = 4
+        bar_width = (self.width() - (len(self._bars) * spacing)) / len(self._bars)
+        
+        for i, val in enumerate(self._bars):
+            h = max(2, val * self.height())
+            y = (self.height() - h) / 2
+            x = i * (bar_width + spacing)
+            
+            # Use accent-like color (blue-ish)
+            color = QColor("#58a6ff")
+            # Fade out older bars
+            alpha = int(255 * (i / len(self._bars)))
+            color.setAlpha(alpha)
+            
+            painter.setBrush(QBrush(color))
+            painter.setPen(Qt.NoPen)
+            painter.drawRoundedRect(QRect(int(x), int(y), int(bar_width), int(h)), 2, 2)
 
 
 class _ChatTextEdit(QPlainTextEdit):
@@ -251,6 +293,10 @@ class _QueueDisplay(QWidget):
 
 class InputWidget(QWidget):
     message_submitted = pyqtSignal(str, list, list)  # text, images, file_attachments
+    search_toggled = pyqtSignal(bool)
+    voice_toggled = pyqtSignal(bool)
+    mic_triggered = pyqtSignal(bool) # True = start, False = stop
+    sync_toggled = pyqtSignal(bool)
     force_send_requested = pyqtSignal()  # stop current generation, send next queued
 
     def __init__(self, parent=None):
@@ -277,6 +323,10 @@ class InputWidget(QWidget):
         self._queue_display.remove_requested.connect(self._remove_from_queue)
         self._queue_display.force_send_requested.connect(self.force_send_requested.emit)
         outer_layout.addWidget(self._queue_display)
+
+        self.visualizer = AudioVisualizer()
+        self.visualizer.hide()
+        outer_layout.addWidget(self.visualizer)
 
         input_row = QHBoxLayout()
         input_row.setSpacing(8)
@@ -315,6 +365,58 @@ class InputWidget(QWidget):
         self.send_btn.setToolTip("Send (Enter)")
         self.send_btn.clicked.connect(self._submit)
         input_row.addWidget(self.send_btn, alignment=Qt.AlignBottom)
+
+        self.web_search_btn = QPushButton("\ud83c\udf10") # Globe icon
+        self.web_search_btn.setObjectName("webSearchBtn")
+        self.web_search_btn.setCheckable(True)
+        self.web_search_btn.setToolTip("Search Web (Grounding)")
+        self.web_search_btn.setFixedSize(36, 36)
+        self.web_search_btn.setStyleSheet(
+            "QPushButton { background: #2d2d2d; color: #888; border: none; border-radius: 6px; font-size: 18px; }"
+            "QPushButton:checked { background: #264f78; color: #4fc3f7; }"
+            "QPushButton:hover { background: #3d3d3d; }"
+        )
+        self.web_search_btn.clicked.connect(lambda checked: self.search_toggled.emit(checked))
+        input_row.addWidget(self.web_search_btn, alignment=Qt.AlignBottom)
+
+        self.mic_btn = QPushButton("\ud83c\udf99\ufe0f") # Mic icon
+        self.mic_btn.setObjectName("micBtn")
+        self.mic_btn.setCheckable(True)
+        self.mic_btn.setToolTip("Voice Input (Record)")
+        self.mic_btn.setFixedSize(36, 36)
+        self.mic_btn.setStyleSheet(
+            "QPushButton { background: #2d2d2d; color: #888; border: none; border-radius: 6px; font-size: 18px; }"
+            "QPushButton:checked { background: #c0392b; color: white; }"
+            "QPushButton:hover { background: #3d3d3d; }"
+        )
+        self.mic_btn.clicked.connect(self._on_mic_clicked)
+        input_row.addWidget(self.mic_btn, alignment=Qt.AlignBottom)
+
+        self.voice_btn = QPushButton("\ud83d\udd0a") # Speaker icon
+        self.voice_btn.setObjectName("voiceBtn")
+        self.voice_btn.setCheckable(True)
+        self.voice_btn.setToolTip("Auto-Read Responses")
+        self.voice_btn.setFixedSize(36, 36)
+        self.voice_btn.setStyleSheet(
+            "QPushButton { background: #2d2d2d; color: #888; border: none; border-radius: 6px; font-size: 18px; }"
+            "QPushButton:checked { background: #264f78; color: #4fc3f7; }"
+            "QPushButton:hover { background: #3d3d3d; }"
+        )
+        self.voice_btn.clicked.connect(lambda checked: self.voice_toggled.emit(checked))
+        input_row.addWidget(self.voice_btn, alignment=Qt.AlignBottom)
+
+        self.sync_btn = QPushButton("\u21c4") # Sync icon
+        self.sync_btn.setObjectName("syncBtn")
+        self.sync_btn.setCheckable(True)
+        self.sync_btn.setToolTip("Sync Input (Send to all splits)")
+        self.sync_btn.setFixedSize(36, 36)
+        self.sync_btn.setStyleSheet("""
+            QPushButton { background: #2d2d2d; color: #888; border: none; border-radius: 6px; font-size: 18px; }
+            QPushButton:checked { background: #264f78; color: #4fc3f7; }
+            QPushButton:hover { background: #3d3d3d; }
+        """)
+        self.sync_btn.clicked.connect(self.sync_toggled.emit)
+        input_row.addWidget(self.sync_btn, alignment=Qt.AlignBottom)
 
         self.force_btn = QPushButton("\u21e7")
         self.force_btn.setObjectName("forceBtn")
@@ -409,12 +511,36 @@ class InputWidget(QWidget):
         self.send_btn.setVisible(not streaming)
         self.stop_btn.setVisible(streaming)
         self.attach_btn.setEnabled(not streaming)
+        self.web_search_btn.setEnabled(not streaming)
+        self.mic_btn.setEnabled(not streaming)
         self.force_btn.setVisible(streaming)
         if streaming:
             self.text_edit.setPlaceholderText("Type to queue next message... (Enter to queue, force-send button to interrupt)")
         else:
             self.text_edit.setPlaceholderText("Type a message... (Enter to send, Shift+Enter for new line, @ to mention file)")
             self._queue_display.update_queue(self._message_queue)
+
+    def _on_mic_clicked(self, checked):
+        if checked:
+            self.visualizer.show()
+            self.mic_btn.setToolTip("Stop Recording")
+            self.mic_btn.setStyleSheet(
+                "QPushButton { background: #c0392b; color: white; border: none; border-radius: 6px; font-size: 18px; }"
+            )
+            self.text_edit.setPlaceholderText("Recording... Click mic again to stop.")
+        else:
+            self.visualizer.hide()
+            self.mic_btn.setToolTip("Voice Input (Record)")
+            self.mic_btn.setStyleSheet(
+                "QPushButton { background: #2d2d2d; color: #888; border: none; border-radius: 6px; font-size: 18px; }"
+                "QPushButton:hover { background: #3d3d3d; }"
+            )
+            self.text_edit.setPlaceholderText("Type a message... (Enter to send, Shift+Enter for new line, @ to mention file)")
+        self.mic_triggered.emit(checked)
+
+    def append_text(self, text):
+        self.text_edit.appendPlainText(text)
+        self.text_edit.setFocus()
 
     def focus_input(self):
         self.text_edit.setFocus()
@@ -603,3 +729,6 @@ class InputWidget(QWidget):
         cursor.insertText(command)
         self.text_edit.setFocus()
         self._submit()
+
+    def update_mic_level(self, level):
+        self.visualizer.set_level(level)

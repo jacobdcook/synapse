@@ -5,7 +5,7 @@ from .themes import THEMES
 
 # Application Constants
 APP_NAME = "Synapse"
-APP_VERSION = "1.0.0"
+APP_VERSION = "2.0.0"
 ORG_NAME = "JacobCook"
 
 # Paths
@@ -15,8 +15,10 @@ CONV_DIR = CONFIG_DIR / "conversations"
 SETTINGS_FILE = CONFIG_DIR / "settings.json"
 DRAFT_FILE = CONFIG_DIR / "draft.txt"
 
+TEMPLATE_DIR = CONFIG_DIR / "templates"
+
 # Create directories if they don't exist
-for d in [CONFIG_DIR, CONV_DIR]:
+for d in [CONFIG_DIR, CONV_DIR, TEMPLATE_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
 # Model Recommendations
@@ -30,14 +32,53 @@ RECOMMENDED_MODELS = [
     {"name": "deepseek-r1:7b", "size_gb": 4.7, "desc": "DeepSeek R1 7B - Reasoning model"},
     {"name": "deepseek-r1:32b", "size_gb": 19.8, "desc": "DeepSeek R1 32B - Premium reasoning"},
     {"name": "qwen2.5:14b", "size_gb": 9.0, "desc": "Qwen 2.5 14B - Excellent all-rounder"},
+    {"name": "gpt-4o", "size_gb": 0, "desc": "OpenAI GPT-4o - Flagship cloud model"},
+    {"name": "claude-3-5-sonnet-20240620", "size_gb": 0, "desc": "Anthropic Claude 3.5 Sonnet - Best for coding"},
 ]
+
+# Model Pricing (per 1M tokens)
+MODEL_PRICES = {
+    "gpt-4o": {"input": 5.0, "output": 15.0},
+    "gpt-4o-mini": {"input": 0.15, "output": 0.6},
+    "claude-3-5-sonnet-20240620": {"input": 3.0, "output": 15.0},
+    "claude-3-haiku-20240307": {"input": 0.25, "output": 1.25},
+    "claude-3-opus-20240229": {"input": 15.0, "output": 75.0},
+}
 
 # UI Defaults
 DEFAULT_MODEL = "huihui_ai/qwen3.5-abliterated:27b-Claude"
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 DEFAULT_GEN_PARAMS = {"temperature": 0.7, "top_p": 0.9, "num_ctx": 4096}
-DEFAULT_SYSTEM_PROMPT = "You are Synapse, a helpful AI coding assistant. You prioritize efficiency and quality."
+DEFAULT_SYSTEM_PROMPT = """You are Synapse, a powerful AI coding assistant.
+You have access to advanced tools and long-term memory.
+1. MEMORY: Use 'remember_fact' for persistent info and 'update_preference' for user style.
+2. PLANNING: For complex tasks, use 'update_plan' to maintain a visible checklist in the sidebar.
+3. AGENTIC LOOPS: You can run multiple tool turns automatically. If a command fails, use 'run_test' and self-correct.
+Prioritize efficiency, quality, and clear communication."""
 DARK_THEME_QSS = THEMES["One Dark"]["qss"]
+
+# Keyboard Shortcuts
+DEFAULT_SHORTCUTS = {
+    "new_chat": "Ctrl+N",
+    "toggle_sidebar": "Ctrl+B",
+    "save_file": "Ctrl+S",
+    "rollback": "Ctrl+Z",
+    "command_palette": "Ctrl+Shift+P",
+    "focus_input": "Ctrl+L",
+    "close_tab": "Ctrl+W",
+    "next_tab": "Ctrl+Tab",
+    "prev_tab": "Ctrl+Shift+Tab",
+    "new_window": "Ctrl+Shift+N",
+    "global_search": "Ctrl+Shift+F",
+    "settings": "Ctrl+,",
+    "import_conv": "Ctrl+I",
+    "zoom_in": "Ctrl+=",
+    "zoom_out": "Ctrl+-",
+    "zoom_reset": "Ctrl+0",
+    "paste_image": "Ctrl+V",
+    "toggle_terminal": "Ctrl+`",
+    "search_replace": "Ctrl+Shift+H",
+}
 
 # Utility Functions
 def load_settings():
@@ -93,10 +134,12 @@ def detect_mime(data_or_path):
         return "image/png"
     mime, _ = mimetypes.guess_type(str(data_or_path))
     return mime or "application/octet-stream"
-
 def format_time(iso_str):
     try:
         dt = _dt.fromisoformat(iso_str)
+        # Convert to local time if it's offset-aware
+        if dt.tzinfo is not None:
+            dt = dt.astimezone() # astimezone() with no args converts to local time
         return dt.strftime("%I:%M %p")
     except Exception:
         return ""
@@ -165,6 +208,20 @@ def _build_chat_template():
         '.msg-name { font-weight: 600; font-size: 13px; color: var(--fg); }\n'
         '.ts { font-size: 11px; color: var(--fg3); }\n'
         '\n'
+        '.branch-switcher {\n'
+        '  display: inline-flex; align-items: center; gap: 4px;\n'
+        '  margin-left: 8px; padding: 1px 6px; border-radius: 4px;\n'
+        '  background: var(--surface2); border: 1px solid var(--border);\n'
+        '  font-size: 10px; color: var(--fg2); user-select: none;\n'
+        '}\n'
+        '.br-btn {\n'
+        '  cursor: pointer; padding: 0 2px; color: var(--fg3); transition: color .12s;\n'
+        '  font-weight: bold;\n'
+        '}\n'
+        '.br-btn:hover { color: var(--accent); }\n'
+        '.br-info { font-weight: 600; min-width: 24px; text-align: center; }\n'
+        '\n'
+        '\n'
         '.msg-content {\n'
         '  font-size: FONT_SIZE_VALpx;\n'
         '  line-height: 1.65;\n'
@@ -226,6 +283,8 @@ def _build_chat_template():
         '.cb-btn:hover { background: var(--border-subtle); color: var(--fg); }\n'
         '.cb-run { border-color: var(--accent2); color: var(--accent2); }\n'
         '.cb-run:hover { background: rgba(126,231,135,.12); }\n'
+        '.cb-preview { border-color: var(--purple); color: var(--purple); }\n'
+        '.cb-preview:hover { background: rgba(188,140,255,.12); }\n'
         '.code-block pre {\n'
         '  margin: 0; padding: 14px 16px;\n'
         '  overflow-x: auto; border: none; border-radius: 0; background: transparent;\n'
@@ -297,6 +356,37 @@ def _build_chat_template():
         '  background: var(--surface); border: 1px solid var(--border);\n'
         '  padding: 2px 6px; border-radius: 4px;\n'
         '}\n'
+        '\n'
+        '.think-block {\n'
+        '  margin: 8px 0;\n'
+        '  border: 1px solid var(--border);\n'
+        '  border-radius: 8px;\n'
+        '  overflow: hidden;\n'
+        '  background: rgba(139,148,158,.06);\n'
+        '  font-size: 12px;\n'
+        '}\n'
+        '.think-header {\n'
+        '  padding: 6px 12px;\n'
+        '  color: var(--fg3);\n'
+        '  cursor: pointer;\n'
+        '  user-select: none;\n'
+        '  font-style: italic;\n'
+        '  font-size: 11px;\n'
+        '}\n'
+        '.think-header:hover { color: var(--fg2); }\n'
+        '.think-chevron { display: inline-block; transition: transform .15s; font-style: normal; }\n'
+        '.think-chevron.open { transform: rotate(90deg); }\n'
+        '.think-body {\n'
+        '  display: none;\n'
+        '  padding: 8px 14px;\n'
+        '  color: var(--fg3);\n'
+        '  border-top: 1px solid var(--border);\n'
+        '  line-height: 1.5;\n'
+        '  font-size: 12px;\n'
+        '  max-height: 400px;\n'
+        '  overflow-y: auto;\n'
+        '}\n'
+        '.think-body.open { display: block; }\n'
         '\n'
         '.tool-block {\n'
         '  margin: 8px 0;\n'
@@ -437,6 +527,13 @@ def _build_chat_template():
         '  body.classList.toggle("open");\n'
         '  if (chev) chev.classList.toggle("open");\n'
         '}\n'
+        'function toggleThink(id) {\n'
+        '  var body = document.getElementById("thinkbody-" + id);\n'
+        '  var chev = document.getElementById("thinkchev-" + id);\n'
+        '  if (!body) return;\n'
+        '  body.classList.toggle("open");\n'
+        '  if (chev) chev.classList.toggle("open");\n'
+        '}\n'
         'window.scrollTo(0, document.body.scrollHeight);\n'
         '</script>\n</body>\n</html>'
     )
@@ -457,10 +554,18 @@ def relative_time(iso_str):
     try:
         from datetime import timezone
         dt = _dt.fromisoformat(iso_str)
+        now = _dt.now(timezone.utc)
+        
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        diff = _dt.now(timezone.utc) - dt
+            # Assume naive timestamps are local time, so we should compare with naive now
+            now = _dt.now()
+        else:
+            # Aware timestamp, ensure we compare in UTC
+            dt = dt.astimezone(timezone.utc)
+            
+        diff = now - dt
         secs = int(diff.total_seconds())
+        if secs < 0: secs = 0 # Handle slight clock drifts
         if secs < 60:
             return "just now"
         if secs < 3600:

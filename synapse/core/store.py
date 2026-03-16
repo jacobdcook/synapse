@@ -1,7 +1,7 @@
 import json
 import uuid
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from ..utils.constants import CONV_DIR, DEFAULT_MODEL, DEFAULT_SYSTEM_PROMPT
 
 log = logging.getLogger(__name__)
@@ -16,6 +16,11 @@ class ConversationStore:
             try:
                 with open(f) as fh:
                     data = json.load(fh)
+                    # Skip empty "New Chat" entries to prevent clutter
+                    messages = data.get("messages", [])
+                    if not messages and data.get("title") == "New Chat":
+                        continue
+                        
                     convos.append({
                         "id": data["id"],
                         "title": data.get("title", "Untitled"),
@@ -42,7 +47,30 @@ class ConversationStore:
         return None
 
     def save(self, conversation):
-        conversation["updated_at"] = datetime.now().isoformat()
+        # Don't save empty "New Chat" conversations
+        if not conversation.get("messages") and conversation.get("title") == "New Chat":
+            log.debug(f"Skipping save for empty conversation {conversation['id']}")
+            return
+
+        conversation["updated_at"] = datetime.now(timezone.utc).isoformat()
+        # Ensure all messages have IDs for branching
+        if "messages" in conversation:
+            if "history" not in conversation:
+                conversation["history"] = []
+                
+            last_id = None
+            for msg in conversation["messages"]:
+                if "id" not in msg:
+                    msg["id"] = str(uuid.uuid4())
+                if "parent_id" not in msg:
+                    msg["parent_id"] = last_id
+                
+                # Add to history if not present
+                if not any(m.get("id") == msg["id"] for m in conversation["history"]):
+                    conversation["history"].append(msg)
+                    
+                last_id = msg["id"]
+        
         path = CONV_DIR / f"{conversation['id']}.json"
         with open(path, "w") as f:
             json.dump(conversation, f, indent=2)
@@ -77,8 +105,9 @@ def new_conversation(model=DEFAULT_MODEL, system_prompt=DEFAULT_SYSTEM_PROMPT):
         "title": "New Chat",
         "model": model,
         "system_prompt": system_prompt,
-        "created_at": datetime.now().isoformat(),
-        "updated_at": datetime.now().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
         "messages": [],
+        "history": [], # To store all branched messages
         "pinned": False,
     }
