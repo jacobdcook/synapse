@@ -76,6 +76,11 @@ class SettingsDialog(QDialog):
         self.auto_continue_check.setChecked(self.settings_data.get("auto_continue", True))
         layout.addRow(self.auto_continue_check)
 
+        self.auto_continue_max_spin = QSpinBox()
+        self.auto_continue_max_spin.setRange(1, 10)
+        self.auto_continue_max_spin.setValue(self.settings_data.get("auto_continue_max", 3))
+        layout.addRow("Max auto-continues:", self.auto_continue_max_spin)
+
         layout.addRow(QLabel("<hr>"))
         rerun_btn = QPushButton("Re-run Onboarding Wizard")
         rerun_btn.clicked.connect(self._rerun_onboarding)
@@ -496,6 +501,7 @@ class SettingsDialog(QDialog):
         self.settings_data["notification_sound"] = self.notification_check.isChecked()
         self.settings_data["auto_exec"] = self.auto_exec_check.isChecked()
         self.settings_data["auto_continue"] = self.auto_continue_check.isChecked()
+        self.settings_data["auto_continue_max"] = self.auto_continue_max_spin.value()
         self.settings_data["gen_params"] = {
             "temperature": self.temp_slider.value() / 100,
             "top_p": self.top_p_slider.value() / 100,

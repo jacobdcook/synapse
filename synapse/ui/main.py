@@ -761,6 +761,9 @@ class MainWindow(QMainWindow):
             
         self.status_label.setText("Indexing (Vector RAG)...")
         self.indexer = WorkspaceIndexer(ws)
+        self.indexer.indexing_progress.connect(
+            lambda cur, tot: self.status_label.setText(f"Indexing: {cur}/{tot} files...")
+        )
         self.indexer.indexing_complete.connect(self._on_indexing_complete)
         self.indexer.start()
 
@@ -1543,16 +1546,19 @@ class MainWindow(QMainWindow):
 
     def _on_response_truncated(self):
         if not self.settings_data.get("auto_continue", True):
+            self.status_label.setText("Response truncated. Auto-continue is disabled in settings.")
             return
-        if self._auto_continue_count >= 3:
-            log.warning("Max auto-continue reached (3). Stopping.")
+        max_continues = self.settings_data.get("auto_continue_max", 3)
+        if self._auto_continue_count >= max_continues:
+            log.warning(f"Max auto-continue reached ({max_continues}). Stopping.")
+            self.status_label.setText(f"Response truncated — auto-continue limit ({max_continues}) reached.")
             self._auto_continue_count = 0
             return
 
         self._auto_continue_count += 1
-        log.info(f"Auto-continuing truncated response (Attempt {self._auto_continue_count}/3)")
-        
-        # Inject continuation prompt
+        log.info(f"Auto-continuing truncated response (Attempt {self._auto_continue_count}/{max_continues})")
+        self.status_label.setText(f"Auto-continuing... ({self._auto_continue_count}/{max_continues})")
+
         continuation = "Please continue from where you left off."
         self._send_message(continuation, bypass_rag=True)
 
