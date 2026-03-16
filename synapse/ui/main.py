@@ -1586,9 +1586,8 @@ class MainWindow(QMainWindow):
         if "history" not in conv: conv["history"] = []
         conv["history"].append(msg)
         
-        # Only add to 'messages' if it's the first one or we are in sync mode and it's index 0
-        # Actually, let's always put it in messages if messages[-1] is the user prompt
-        if conv["messages"] and conv["messages"][-1]["role"] == "user":
+        # Add to messages if last message is user prompt OR tool results (post-tool continuation)
+        if conv["messages"] and conv["messages"][-1].get("role") in ("user", "tool_results"):
             conv["messages"].append(msg)
         
         self.store.save(conv)

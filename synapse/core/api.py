@@ -151,38 +151,52 @@ class BaseAIWorker(QThread):
     def _prune_messages(self, messages, max_tokens=3500):
         """
         Prunes messages to fit within max_tokens.
-        Strategy: Keep the first 2 messages (system/initial greeting) and as many recent messages as possible.
+        Strategy: Keep the first 2 messages and as many recent messages as possible.
+        Tool call/result pairs are kept together to avoid breaking the chain.
         """
         if not messages:
             return []
-            
-        # 1 word ~ 1.5 tokens heuristic
+
         def est_tokens(msg):
             return len(str(msg.get("content", "")).split()) * 1.5 + 20
 
-        # Always try to keep the first 2 messages if they exist
-        first_few = messages[:2] if len(messages) > 2 else []
-        remaining = messages[2:] if len(messages) > 2 else messages
-        
-        first_few_tokens = sum(est_tokens(m) for m in first_few)
-        budget = max_tokens - first_few_tokens - 100 # safety margin
-        
-        if budget < 500: # If first few are too large, just use the latest
+        # Group messages into atomic chunks (tool_calls + tool_results stay together)
+        chunks = []
+        i = 0
+        while i < len(messages):
+            msg = messages[i]
+            if msg.get("tool_calls") and i + 1 < len(messages) and messages[i + 1].get("role") == "tool_results":
+                chunks.append([msg, messages[i + 1]])
+                i += 2
+            else:
+                chunks.append([msg])
+                i += 1
+
+        first_few = chunks[:2] if len(chunks) > 2 else []
+        remaining = chunks[2:] if len(chunks) > 2 else chunks
+
+        first_few_tokens = sum(est_tokens(m) for chunk in first_few for m in chunk)
+        budget = max_tokens - first_few_tokens - 100
+
+        if budget < 500:
             budget = max_tokens - 100
             first_few = []
-            remaining = messages
+            remaining = chunks
 
         pruned_recent = []
         current_tokens = 0
-        for msg in reversed(remaining):
-            tokens = est_tokens(msg)
+        for chunk in reversed(remaining):
+            tokens = sum(est_tokens(m) for m in chunk)
             if current_tokens + tokens < budget:
-                pruned_recent.insert(0, msg)
+                pruned_recent.insert(0, chunk)
                 current_tokens += tokens
             else:
                 break
-                
-        return first_few + pruned_recent
+
+        result = []
+        for chunk in first_few + pruned_recent:
+            result.extend(chunk)
+        return result
 
     def run(self):
         raise NotImplementedError("Subclasses must implement run()")
