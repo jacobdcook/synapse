@@ -907,7 +907,7 @@ class MainWindow(QMainWindow):
         ):
             if hasattr(widget, 'apply_theme'):
                 widget.apply_theme(theme)
-        for attr in ('canvas', 'terminal_widget'):
+        for attr in ('canvas', 'terminal_widget', 'workspace_panel'):
             w = getattr(self, attr, None)
             if w and hasattr(w, 'apply_theme'):
                 w.apply_theme(theme)
@@ -929,7 +929,8 @@ class MainWindow(QMainWindow):
         self.logo_anim.start()
 
     def _view_logs(self):
-        log_path = Path.home() / ".synapse.log"
+        from ..utils.constants import CONFIG_DIR
+        log_path = CONFIG_DIR / "synapse.log"
         if log_path.exists():
             try:
                 content = log_path.read_text(errors='replace')

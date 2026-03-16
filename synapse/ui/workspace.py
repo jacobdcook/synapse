@@ -117,6 +117,17 @@ class WorkspacePanel(QWidget):
         if path and Path(path).is_file():
             self.file_selected.emit(path)
 
+    def apply_theme(self, theme):
+        fg = theme.get("fg", "#e6edf3")
+        input_bg = theme.get("input_bg", "#0d1117")
+        border = theme.get("border", "#30363d")
+        sidebar_bg = theme.get("sidebar_bg", "#1e1e1e")
+        self.tree.setStyleSheet(f"""
+            QTreeWidget {{ background: {input_bg}; color: {fg}; border: 1px solid {border}; }}
+            QTreeWidget::item {{ padding: 2px; }}
+            QTreeWidget::item:selected {{ background: {sidebar_bg}; }}
+        """)
+
 
 class EditorTabs(QTabWidget):
     def __init__(self, parent=None):

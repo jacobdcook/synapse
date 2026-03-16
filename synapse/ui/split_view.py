@@ -110,3 +110,15 @@ class SplitViewWidget(QSplitter):
         if 0 <= index < len(self.panes):
             return self.panes[index]
         return None
+
+    def apply_theme(self, theme):
+        bg = theme.get("bg", "#1a1b1e")
+        fg = theme.get("fg", "#e6edf3")
+        border = theme.get("border", "#30363d")
+        accent = theme.get("accent", "#58a6ff")
+        for pane in self.panes:
+            pane.header.setStyleSheet(f"#paneHeader {{ background: {bg}; border-bottom: 1px solid {border}; }}")
+            pane.best_btn.setStyleSheet(f"""
+                QPushButton {{ background: {border}; color: #888; border-radius: 4px; font-size: 11px; }}
+                QPushButton:checked {{ background: #264f78; color: {accent}; }}
+            """)

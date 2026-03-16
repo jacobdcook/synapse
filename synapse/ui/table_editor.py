@@ -119,3 +119,17 @@ class TableEditorDialog(QDialog):
         curr = self.table.currentColumn()
         if curr >= 0:
             self.table.removeColumn(curr)
+
+    def apply_theme(self, theme):
+        bg = theme.get("bg", "#1a1b1e")
+        fg = theme.get("fg", "#e6edf3")
+        input_bg = theme.get("input_bg", "#0d1117")
+        border = theme.get("border", "#30363d")
+        accent = theme.get("accent", "#238636")
+        self.setStyleSheet(f"""
+            QDialog {{ background: {bg}; color: {fg}; }}
+            QTableWidget {{ background: {input_bg}; color: {fg}; gridline-color: {border}; }}
+            QHeaderView::section {{ background: {bg}; color: {fg}; border: 1px solid {border}; padding: 4px; }}
+            QPushButton {{ background: {border}; color: {fg}; border: none; padding: 6px 12px; border-radius: 4px; }}
+            QPushButton:hover {{ background: {input_bg}; }}
+        """)
