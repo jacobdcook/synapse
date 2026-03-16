@@ -2,7 +2,6 @@ import json
 import os
 import logging
 import urllib.request
-import urllib.error
 from pathlib import Path
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QStackedWidget, QWidget,

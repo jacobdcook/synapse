@@ -1,7 +1,6 @@
 import json
 import logging
 import urllib.request
-import urllib.error
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize, QUrl
 from PyQt5.QtGui import QFont, QColor, QPalette, QDesktopServices
 from PyQt5.QtWidgets import (
