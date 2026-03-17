@@ -169,21 +169,33 @@ class BackendManager(QObject):
         )
 
     def _kill_on_port(self, port):
-        """Kills any process listening on the given port."""
+        """Kills any process listening on the given port (cross-platform)."""
+        system = platform.system()
         try:
-            # Try lsof + kill as it's more common than fuser in some environments
-            out = subprocess.check_output(["lsof", "-t", f"-i:{port}"]).decode().strip()
-            if out:
-                for pid in out.split():
-                    os.kill(int(pid), 9)
-                time.sleep(1)
+            if system == "Windows":
+                out = subprocess.check_output(
+                    ["netstat", "-ano", "-p", "TCP"], text=True, timeout=5
+                )
+                for line in out.splitlines():
+                    if f":{port}" in line and "LISTENING" in line:
+                        pid = line.strip().split()[-1]
+                        try:
+                            subprocess.run(["taskkill", "/PID", pid, "/F"], capture_output=True, timeout=5)
+                        except Exception:
+                            pass
+            else:
+                out = subprocess.check_output(["lsof", "-t", f"-i:{port}"], text=True, timeout=5).strip()
+                if out:
+                    for pid in out.split():
+                        os.kill(int(pid), 9)
+            time.sleep(1)
         except Exception:
             try:
-                # Fallback to fuser
-                subprocess.run(["fuser", "-k", f"{port}/tcp"], capture_output=True)
-                time.sleep(1)
+                if system != "Windows":
+                    subprocess.run(["fuser", "-k", f"{port}/tcp"], capture_output=True, timeout=5)
+                    time.sleep(1)
             except Exception:
-                pass
+                log.warning(f"Could not kill process on port {port}")
 
     def stop(self, backend_id):
         proc = self.processes.get(backend_id)

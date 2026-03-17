@@ -88,10 +88,11 @@ class VoiceManager(QObject):
                     self.mic_level.emit(level)
 
                     if self.hands_free:
+                        import time as _time
                         if rms < self.vad_threshold:
                             if self._silence_start is None:
-                                self._silence_start = time.inputBufferAdcTime
-                            elif time.inputBufferAdcTime - self._silence_start > self.silence_timeout:
+                                self._silence_start = _time.monotonic()
+                            elif _time.monotonic() - self._silence_start > self.silence_timeout:
                                 # Silence threshold met, trigger stop in a safe way
                                 # We can't call stop_recording directly if it closes the stream from here
                                 # Instead, we flag it.

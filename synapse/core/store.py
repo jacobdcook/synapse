@@ -260,7 +260,7 @@ class ConversationStore:
         conv = self.load(conv_id)
         if conv:
             tags = conv.get("tags", [])
-            tag = tag.strip().lstrip("#")
+            tag = tag.strip().lstrip("#")[:32]
             if tag and tag not in tags:
                 tags.append(tag)
                 conv["tags"] = tags

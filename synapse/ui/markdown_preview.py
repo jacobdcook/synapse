@@ -34,4 +34,4 @@ class MarkdownPreview(QWidget):
         self._md.reset()
         body = self._md.convert(md_text)
         html = f"<!DOCTYPE html><html><head><style>{PREVIEW_CSS}</style></head><body>{body}</body></html>"
-        self.web_view.setHtml(html, QUrl("qrc:/"))
+        self.web_view.setHtml(html)

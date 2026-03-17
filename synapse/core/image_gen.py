@@ -7,9 +7,7 @@ import uuid
 from pathlib import Path
 from datetime import datetime, timezone
 from PyQt5.QtCore import QObject, pyqtSignal, QThread
-from ..utils.constants import DEFAULT_SD_URL, DEFAULT_COMFYUI_URL
-
-from ..utils.constants import CONFIG_DIR
+from ..utils.constants import DEFAULT_SD_URL, DEFAULT_COMFYUI_URL, CONFIG_DIR
 
 log = logging.getLogger(__name__)
 

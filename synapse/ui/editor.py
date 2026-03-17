@@ -219,7 +219,11 @@ class FindReplaceBar(QWidget):
         else:
             new_content = re.sub(re.escape(text), replacement, content, flags=re.IGNORECASE)
         if new_content != content:
-            self.editor.setPlainText(new_content)
+            cursor = self.editor.textCursor()
+            cursor.beginEditBlock()
+            cursor.select(cursor.Document)
+            cursor.insertText(new_content)
+            cursor.endEditBlock()
             self.count_label.setText("All replaced")
 
 

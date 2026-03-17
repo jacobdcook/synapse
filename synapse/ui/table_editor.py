@@ -80,9 +80,9 @@ class TableEditorDialog(QDialog):
 
         for r_idx, line in enumerate(data_lines):
             cols = [c.strip() for c in line.split("|") if c.strip()]
-            for c_idx, val in enumerate(cols):
-                if c_idx < self.table.columnCount():
-                    self.table.setItem(r_idx, c_idx, QTableWidgetItem(val))
+            for c_idx in range(self.table.columnCount()):
+                val = cols[c_idx] if c_idx < len(cols) else ""
+                self.table.setItem(r_idx, c_idx, QTableWidgetItem(val))
 
     def get_markdown(self):
         cols = self.table.columnCount()

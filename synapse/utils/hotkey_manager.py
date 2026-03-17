@@ -1,5 +1,8 @@
 import logging
-from pynput import keyboard
+try:
+    from pynput import keyboard
+except ImportError:
+    keyboard = None
 from PyQt5.QtCore import QThread, pyqtSignal
 
 log = logging.getLogger(__name__)
@@ -13,6 +16,9 @@ class GlobalHotkeyManager(QThread):
         self._listener = None
 
     def run(self):
+        if keyboard is None:
+            log.warning("pynput not installed — global hotkeys disabled. Install with: pip install pynput")
+            return
         try:
             log.info(f"Starting global hotkey listener for: {self.hotkey_str}")
             with keyboard.GlobalHotKeys({

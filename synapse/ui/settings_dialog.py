@@ -368,8 +368,14 @@ class SettingsDialog(QDialog):
         conn.connected.connect(on_connected)
         conn.disconnected.connect(on_disconnected)
 
-        # Timeout after 10 seconds
-        QTimer.singleShot(10000, lambda: self.mcp_status_label.setText(f"✗ {cfg['name']} test timed out"))
+        # Timeout after 10 seconds — also disconnect on timeout
+        def _on_timeout():
+            self.mcp_status_label.setText(f"✗ {cfg['name']} test timed out")
+            try:
+                conn.disconnect()
+            except Exception:
+                pass
+        QTimer.singleShot(10000, _on_timeout)
 
         try:
             conn.connect()

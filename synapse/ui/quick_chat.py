@@ -98,7 +98,8 @@ class QuickChatWidget(QWidget):
         from ..utils.constants import DEFAULT_GEN_PARAMS, load_settings
         settings = load_settings()
         messages = [{"role": "user", "content": text}]
-        self._worker = WorkerFactory(model, messages, "Be concise.", DEFAULT_GEN_PARAMS, settings)
+        system_prompt = settings.get("system_prompt", "Be concise.")
+        self._worker = WorkerFactory(model, messages, system_prompt, DEFAULT_GEN_PARAMS, settings)
         self._worker.token_received.connect(self._on_token)
         self._worker.response_finished.connect(self._on_done)
         self._worker.error_occurred.connect(self._on_error)
