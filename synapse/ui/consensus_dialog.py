@@ -163,7 +163,10 @@ class ConsensusDialog(QDialog):
         from ..core.api import WorkerFactory
         from ..utils.constants import DEFAULT_GEN_PARAMS
 
-        judge = [cb.text() for cb in self.model_checks if cb.isChecked()][0]
+        checked = [cb.text() for cb in self.model_checks if cb.isChecked()]
+        if not checked:
+            return
+        judge = checked[0]
         messages = [{"role": "user", "content": summary}]
         self._synth_buf = ""
 

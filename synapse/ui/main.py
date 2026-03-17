@@ -1086,7 +1086,7 @@ class MainWindow(QMainWindow):
                 layout.addWidget(text)
                 btn_row = QHBoxLayout()
                 open_ext_btn = QPushButton("Open in External Editor")
-                open_ext_btn.clicked.connect(lambda: __import__('subprocess').Popen(['xdg-open', str(log_path)]))
+                open_ext_btn.clicked.connect(lambda: __import__('webbrowser').open(str(log_path)))
                 refresh_btn = QPushButton("Refresh")
                 def _refresh():
                     new_content = log_path.read_text(errors='replace')

@@ -203,6 +203,8 @@ class MCPServerConnection(QObject):
             }
             line = json.dumps(msg) + "\n"
             with self._lock:
+                if not self._proc or not self._proc.stdin:
+                    raise RuntimeError(f"MCP server not connected")
                 self._proc.stdin.write(line.encode())
                 self._proc.stdin.flush()
 

@@ -104,6 +104,9 @@ class CanvasWidget(QWidget):
             f.write(self._last_content.encode('utf-8'))
             temp_path = f.name
         webbrowser.open(f"file://{os.path.abspath(temp_path)}")
+        # Clean up after a delay so the browser has time to read it
+        import threading
+        threading.Timer(30, lambda: os.unlink(temp_path) if os.path.exists(temp_path) else None).start()
 
     def clear(self):
         self._last_content = ""
