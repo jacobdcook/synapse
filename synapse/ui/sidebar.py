@@ -433,6 +433,6 @@ class SidebarWidget(QWidget):
             html = renderer.build_html(conv.get("messages", []), [])
             with open(path, "w", encoding="utf-8") as f:
                 f.write(html)
-        except OSError as e:
+        except Exception as e:
             from PyQt5.QtWidgets import QMessageBox
-            QMessageBox.warning(self, "Export Error", f"Failed to write file: {e}")
+            QMessageBox.warning(self, "Export Error", f"Failed to export: {e}")

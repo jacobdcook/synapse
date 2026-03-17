@@ -83,6 +83,8 @@ class ConsensusDialog(QDialog):
 
         selected = [cb.text() for cb in self.model_checks if cb.isChecked()]
         if len(selected) < 2:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.information(self, "Selection Required", "Select at least 2 models to compare.")
             return
 
         self.run_btn.setEnabled(False)
@@ -144,6 +146,8 @@ class ConsensusDialog(QDialog):
 
     def _synthesize(self):
         if len(self._responses) < 2:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.information(self, "Not Ready", "Need at least 2 model responses before synthesizing.")
             return
         self.synth_btn.setEnabled(False)
         self.synth_btn.setText("Synthesizing...")

@@ -34,7 +34,11 @@ class HuggingFaceAPI:
             req = urllib.request.Request(url, headers={"User-Agent": "Synapse/3.0"})
             with urllib.request.urlopen(req, timeout=15) as resp:
                 data = json.loads(resp.read().decode())
-                return data
+                if isinstance(data, list):
+                    return data
+                if isinstance(data, dict):
+                    return data.get("results", data.get("models", []))
+                return []
         except Exception as e:
             log.error(f"HF Search failed: {e}")
             return []

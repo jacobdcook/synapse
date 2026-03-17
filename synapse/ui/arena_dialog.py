@@ -113,7 +113,9 @@ class ArenaDialog(QDialog):
         self.panel_b["buf"] = ""
         self.responses = {}
 
-        pool = self.models[:]
+        pool = list(dict.fromkeys(self.models))
+        if len(pool) < 2:
+            return
         random.shuffle(pool)
         self.model_a = pool[0]
         self.model_b = pool[1]

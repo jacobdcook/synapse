@@ -125,8 +125,8 @@ class PlaygroundPanel(QDialog):
         self.run_btn.setText("Run")
         tokens = stats.get("eval_count", 0)
         duration = stats.get("eval_duration", 0)
-        if duration > 0:
-            tps = tokens / (duration / 1e9) if duration > 1e6 else 0
+        if duration > 1e6:
+            tps = tokens / (duration / 1e9)
             self.stats_label.setText(f"{tokens} tokens | {tps:.1f} tok/s")
         elif tokens:
             self.stats_label.setText(f"{tokens} tokens")

@@ -1,4 +1,5 @@
 from PyQt5 import QtWebEngineWidgets  # Must be imported before QApplication
+import os
 import sys
 import logging
 import logging.handlers
@@ -12,8 +13,9 @@ LOG_DIR = CONFIG_DIR
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 log_path = str(LOG_DIR / "synapse.log")
 
+log_level = os.environ.get("SYNAPSE_LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, log_level, logging.INFO),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),

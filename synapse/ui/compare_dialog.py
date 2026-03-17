@@ -128,8 +128,14 @@ class CompareDialog(QDialog):
 
     def closeEvent(self, event):
         for w in self.workers:
+            try:
+                w.token_received.disconnect()
+                w.finished.disconnect()
+            except (TypeError, RuntimeError):
+                pass
             if w.isRunning():
                 w.terminate()
+                w.wait(2000)
         super().closeEvent(event)
 
     def apply_theme(self, theme):

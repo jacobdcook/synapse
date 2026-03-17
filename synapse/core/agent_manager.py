@@ -59,6 +59,13 @@ class AgentManager:
                 self.agents[agent.id] = agent
         except Exception as e:
             log.error(f"Failed to load agents: {e}")
+            backup = self.storage_path.with_suffix(".json.bak")
+            try:
+                import shutil
+                shutil.copy2(self.storage_path, backup)
+                log.info(f"Backed up corrupted agents file to {backup}")
+            except Exception:
+                pass
             self._create_defaults()
 
     def _create_defaults(self):

@@ -1,7 +1,15 @@
 import re
 import logging
-from youtube_transcript_api import YouTubeTranscriptApi
-from pytube import YouTube
+
+try:
+    from youtube_transcript_api import YouTubeTranscriptApi
+except ImportError:
+    YouTubeTranscriptApi = None
+
+try:
+    from pytube import YouTube
+except ImportError:
+    YouTube = None
 
 log = logging.getLogger(__name__)
 
@@ -18,12 +26,17 @@ class YouTubeHandler:
         if not video_id:
             return None, "Invalid YouTube URL"
 
+        if YouTubeTranscriptApi is None:
+            return None, "youtube-transcript-api is not installed. Install with: pip install youtube-transcript-api"
+
         try:
             transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
             full_text = " ".join([item['text'] for item in transcript_list])
             
             # Try to get metadata with pytube
             try:
+                if YouTube is None:
+                    raise ImportError("pytube not installed")
                 yt = YouTube(url)
                 title = yt.title
                 author = yt.author

@@ -218,7 +218,7 @@ class BackendManager(QObject):
             if backend_id == "sd" and "Model loaded in" in decoded_line:
                 self.statuses[backend_id] = "running"
                 self.status_changed.emit(backend_id, "running")
-            elif backend_id == "comfy" and "To see the GUI go to" in line:
+            elif backend_id == "comfy" and "To see the GUI go to" in decoded_line:
                 self.statuses[backend_id] = "running"
                 self.status_changed.emit(backend_id, "running")
 

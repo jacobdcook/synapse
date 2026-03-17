@@ -14,6 +14,7 @@ TASKS_FILE = CONFIG_DIR / "scheduled_tasks.json"
 
 class TaskScheduler(QObject):
     task_started = pyqtSignal(dict)
+    task_completed = pyqtSignal(dict)
     task_finished = pyqtSignal(dict, str) # task, result
 
     def __init__(self, parent=None):
@@ -96,6 +97,14 @@ class TaskScheduler(QObject):
         # For now, we'll just log that it SHOULD run.
         # Implementation of actual execution will happen in main.py via signal.
         log.info(f"Executing scheduled task: {task['id']}")
+
+    def complete_task(self, task_id):
+        for task in self.tasks:
+            if task["id"] == task_id:
+                task["status"] = "completed"
+                self._save_tasks()
+                self.task_completed.emit(task)
+                break
 
 # Global instance
 scheduler = TaskScheduler()

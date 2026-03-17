@@ -1,5 +1,6 @@
 import json
 import os
+import tempfile
 import uuid
 import logging
 from datetime import datetime, timezone
@@ -35,8 +36,17 @@ class TaskManager:
     def save(self):
         try:
             self.config_dir.mkdir(parents=True, exist_ok=True)
-            with open(self.tasks_file, "w") as f:
-                json.dump(self.tasks, f, indent=2)
+            fd, tmp_path = tempfile.mkstemp(dir=str(self.config_dir), suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w") as f:
+                    json.dump(self.tasks, f, indent=2)
+                os.replace(tmp_path, str(self.tasks_file))
+            except Exception:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
         except Exception as e:
             log.error(f"Failed to save tasks: {e}")
 

@@ -5,8 +5,6 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont
-from ..core.renderer import ChatRenderer
-
 log = logging.getLogger(__name__)
 
 class ReplayDialog(QDialog):
@@ -21,7 +19,6 @@ class ReplayDialog(QDialog):
         
         self.messages = conversation.get("messages", [])
         self.current_idx = 0
-        self.renderer = ChatRenderer()
         
         self._setup_ui()
         self._update_display()
