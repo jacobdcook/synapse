@@ -97,6 +97,8 @@ class GitPanel(QWidget):
             self.diff_view.clear()
             return
 
+        if self._worker and self._worker.isRunning():
+            self._worker.wait(2000)
         self._worker = GitStatusWorker(self._workspace_dir)
         self._worker.status_ready.connect(self._on_status_ready)
         self._worker.start()

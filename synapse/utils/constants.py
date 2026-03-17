@@ -1,6 +1,9 @@
 import os
 import json
+import logging
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 from .themes import THEMES
 
 # Application Constants
@@ -107,16 +110,16 @@ def load_settings():
         try:
             with open(SETTINGS_FILE, 'r') as f:
                 return json.load(f)
-        except Exception:
-            pass
+        except Exception as e:
+            log.error(f"Failed to load settings from {SETTINGS_FILE}: {e}")
     return {}
 
 def save_settings(data):
     try:
         with open(SETTINGS_FILE, 'w') as f:
             json.dump(data, f, indent=4)
-    except Exception:
-        pass
+    except Exception as e:
+        log.error(f"Failed to save settings to {SETTINGS_FILE}: {e}")
 
 _ollama_url = DEFAULT_OLLAMA_URL
 def get_ollama_url():

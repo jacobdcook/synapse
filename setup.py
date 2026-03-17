@@ -10,6 +10,9 @@ setup(
         "PyQtWebEngine",
         "markdown",
         "pygments",
+        "requests",
+        "beautifulsoup4",
+        "pynput",
     ],
     extras_require={
         "voice": [

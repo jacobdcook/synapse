@@ -72,7 +72,7 @@ class AnalyticsManager:
         # Group by model
         by_model = {}
         for l in self.logs:
-            m = l["model"]
+            m = l.get("model", "unknown")
             by_model[m] = by_model.get(m, 0) + l.get("input_tokens", 0) + l.get("output_tokens", 0)
             
         return {

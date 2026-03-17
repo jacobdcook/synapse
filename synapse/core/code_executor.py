@@ -1,5 +1,6 @@
 import os
 import sys
+import signal
 import subprocess
 import tempfile
 import base64
@@ -37,7 +38,8 @@ class CodeExecutor:
                 capture_output=True,
                 text=True,
                 cwd=str(self.workspace_dir),
-                timeout=30
+                timeout=30,
+                start_new_session=True
             )
 
             # Collect any generated images
@@ -56,7 +58,11 @@ class CodeExecutor:
                 "images": images
             }
 
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as e:
+            try:
+                os.killpg(os.getpgid(e.args[0].pid if hasattr(e, 'args') and e.args else 0), signal.SIGKILL)
+            except (ProcessLookupError, OSError, AttributeError):
+                pass
             return {
                 "stdout": "",
                 "stderr": "Execution timed out (30s limit).",

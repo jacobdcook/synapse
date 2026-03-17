@@ -9,7 +9,7 @@ class PrivacyFilter:
     PATTERNS = {
         "EMAIL": r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}",
         "IPV4": r"\b(?:\d{1,3}\.){3}\d{1,3}\b",
-        "API_KEY_GENERIC": r"\b[a-zA-Z0-9]{32,}\b", # Most API keys are 32+ chars
+        "API_KEY_GENERIC": r"\b[a-zA-Z0-9]{32,256}\b", # Most API keys are 32+ chars
         "OPENAI_KEY": r"sk-[a-zA-Z0-9]{48}",
         "AWS_KEY": r"AKIA[A-Z0-9]{16}",
         "PHONE": r"\b(?:\+?\d{1,3}[- ]?)?\(?\d{3}\)?[- ]?\d{3}[- ]?\d{4}\b",

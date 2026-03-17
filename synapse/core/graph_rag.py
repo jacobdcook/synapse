@@ -144,7 +144,8 @@ JSON RESULT:
         """Simple heuristic extraction when LLM fails."""
         # Extract capitalized words as potential entities
         words = query.split()
-        potential = [w.strip("?,.!") for w in words if w[0].isupper()]
+        potential = [w.strip("?,.!") for w in words if w and w[0].isupper()]
+        potential = [p for p in potential if p]
         return potential[:3]
 
     def search(self, query, vector_results, depth=1):

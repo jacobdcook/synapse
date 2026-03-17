@@ -188,7 +188,7 @@ class ImageGenWorker(QThread):
             err_data = e.read().decode()
             try:
                 msg = json.loads(err_data).get("error", str(e))
-            except:
+            except (json.JSONDecodeError, KeyError):
                 msg = str(e)
             return {"success": False, "error": f"Hugging Face Error: {msg}"}
         except Exception as e:
@@ -296,7 +296,7 @@ class ImageGenWorker(QThread):
                     err_json = json.loads(err_data)
                     if "node_errors" in err_json:
                         return {"success": False, "error": "ComfyUI Workflow Error: Missing or invalid model/nodes."}
-                except: pass
+                except (json.JSONDecodeError, KeyError): pass
                 return {"success": False, "error": f"ComfyUI HTTP Error: {e.code}"}
             except urllib.error.URLError:
                 continue

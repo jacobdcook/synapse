@@ -102,7 +102,7 @@ class WorkflowExecutor(QThread):
 
     def _run_node_sync(self, model, prompt):
         from .api import WorkerFactory
-        from PyQt5.QtCore import QEventLoop
+        from PyQt5.QtCore import QEventLoop, QTimer
 
         loop = QEventLoop()
         result_container = {"text": "", "error": None}
@@ -115,12 +115,22 @@ class WorkflowExecutor(QThread):
             result_container["error"] = err
             loop.quit()
 
+        def on_timeout():
+            result_container["error"] = "Workflow node timed out (120s)"
+            loop.quit()
+
         messages = [{"role": "user", "content": prompt}]
         worker = WorkerFactory(model, messages)
         worker.response_finished.connect(on_done)
         worker.error_occurred.connect(on_error)
         worker.start()
+
+        timer = QTimer()
+        timer.setSingleShot(True)
+        timer.timeout.connect(on_timeout)
+        timer.start(120000)
         loop.exec_()
+        timer.stop()
 
         if result_container["error"]:
             raise Exception(result_container["error"])

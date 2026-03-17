@@ -82,7 +82,7 @@ class ChatRenderer:
                         f'</div>'
                     )
 
-            lang_label = lang or "text"
+            lang_label = html_module.escape(lang) if lang else "text"
 
             lang_lower = lang.lower()
             preview_btn = ""

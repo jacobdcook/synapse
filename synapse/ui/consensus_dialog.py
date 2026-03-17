@@ -17,6 +17,7 @@ class ConsensusDialog(QDialog):
         self._workers = []
         self._responses = {}
         self._bufs = {}
+        self._synth_buf = ""
 
         self.setStyleSheet("""
             QDialog { background: #1a1b1e; }

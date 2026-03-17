@@ -232,6 +232,8 @@ class MCPServerConnection(QObject):
                 self._pending[req_id].put(msg)
         except json.JSONDecodeError:
             log.warning(f"Failed to parse MCP response: {line_bytes}")
+            for rid, q in list(self._pending.items()):
+                q.put({"error": {"code": -32700, "message": "Parse error from server"}, "id": rid})
 
     def _on_proc_death(self):
         """Called by reader thread when process dies."""

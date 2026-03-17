@@ -200,6 +200,8 @@ class ToolExecutor(QObject):
     def _validate_path(self, path):
         if not self.workspace_dir:
             return None, "Error: No workspace open."
+        if os.path.isabs(path):
+            return None, f"Error: Absolute paths are not allowed. Use a relative path within the workspace."
         full_path = (self.workspace_dir / path).resolve()
         ws_resolved = self.workspace_dir.resolve()
         try:
