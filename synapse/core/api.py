@@ -1,4 +1,5 @@
 import json
+import re
 import socket
 import urllib.request
 import urllib.error
@@ -753,8 +754,17 @@ class TitleWorker(QThread):
                     data = json.loads(resp.read())
                     title = data.get("message", {}).get("content", "").strip().strip('"').strip("'")
 
-            if title and len(title) < 80:
+            # Strip thinking tags from models that use them (qwen3, deepseek, etc.)
+            if title:
+                title = re.sub(r'<think>.*?</think>', '', title, flags=re.DOTALL).strip()
+                title = title.strip('"').strip("'").strip()
+                # Truncate overly long titles
+                if len(title) >= 80:
+                    title = title[:77] + "..."
+
+            if title:
                 self.title_ready.emit(self.conv_id, title)
+                return
             elif self.model.startswith("claude-") or ("/" in self.model and ":" not in self.model):
                 # OpenRouter fallback or Claude
                 payload = {
@@ -773,36 +783,42 @@ class TitleWorker(QThread):
                     system_msg = next((m["content"] for m in summary_msgs if m["role"] == "system"), "")
                     if system_msg: payload["system"] = system_msg
 
-                req = urllib.request.Request(
-                    url,
-                    data=json.dumps(payload).encode(),
-                    headers={
-                        "Content-Type": "application/json",
-                        "Authorization": f"Bearer {key}" if "/" in self.model else None,
-                        "x-api-key": key if "anthropic" in url else None,
-                        "anthropic-version": "2023-06-01" if "anthropic" in url else None
-                    }
-                )
                 headers = {"Content-Type": "application/json"}
                 if "/" in self.model: headers["Authorization"] = f"Bearer {key}"
-                else: 
+                else:
                     headers["x-api-key"] = key
                     headers["anthropic-version"] = "2023-06-01"
-                
+
                 req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=headers)
 
                 with urllib.request.urlopen(req, timeout=10) as resp:
                     data = json.loads(resp.read())
-                    if "/" in self.model: # OpenRouter / OpenAI format
+                    if "/" in self.model:
                         title = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip().strip('"').strip("'")
-                    else: # Anthropic format
+                    else:
                         title = data.get("content", [{}])[0].get("text", "").strip().strip('"').strip("'")
-                
-                if title and len(title) < 80:
+
+                if title:
+                    if len(title) >= 80:
+                        title = title[:77] + "..."
                     self.title_ready.emit(self.conv_id, title)
+                    return
 
         except Exception as e:
-            log.warning(f"Auto-title failed: {e}")
+            log.warning(f"Auto-title API failed: {e}")
+
+        # Fallback: use first few words of the user's first message
+        try:
+            user_msg = next((m.get("content", "") for m in self.messages if m.get("role") == "user"), "")
+            if user_msg:
+                words = user_msg.split()[:6]
+                fallback = " ".join(words)
+                if len(fallback) > 50:
+                    fallback = fallback[:47] + "..."
+                if fallback:
+                    self.title_ready.emit(self.conv_id, fallback)
+        except Exception:
+            pass
 
 
 class SummaryWorker(QThread):

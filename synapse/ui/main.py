@@ -1670,7 +1670,8 @@ class MainWindow(QMainWindow):
 
         # Auto-title after first real assistant response (skip empty tool-call-only messages)
         real_assistant = [m for m in conv["messages"] if m["role"] == "assistant" and m.get("content", "").strip()]
-        if len(real_assistant) == 1 and conv.get("title") == "New Chat":
+        log.debug(f"Auto-title check: {len(real_assistant)} real assistant msgs, title='{conv.get('title')}'")
+        if len(real_assistant) >= 1 and conv.get("title") == "New Chat":
             self._auto_title(conv)
 
         # Smart Auto-Tagging (F12) - Trigger after first assistant turn or every 5 user messages
@@ -2959,6 +2960,10 @@ class MainWindow(QMainWindow):
         self._save_draft()
         if self._conn_checker:
             self._conn_checker.stop()
+        # Wait for title worker to finish so title gets saved
+        tw = getattr(self, "_title_worker", None)
+        if tw and tw.isRunning():
+            tw.wait(3000)
         for worker_list in (
             getattr(self, "_summary_workers", []),
             getattr(self, "_tag_workers", []),
