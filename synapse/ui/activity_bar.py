@@ -1,5 +1,24 @@
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QPushButton, QSizePolicy
 from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtGui import QFont, QFontDatabase
+
+
+def _emoji_font(size=18):
+    """Build a font that can render emoji on any platform."""
+    candidates = [
+        "Noto Color Emoji",
+        "Segoe UI Emoji",      # Windows
+        "Apple Color Emoji",   # macOS
+        "Symbola",
+        "Noto Emoji",
+    ]
+    for name in candidates:
+        fid = QFontDatabase().font(name, "", size)
+        if fid.family().lower().replace(" ", "") != "":
+            f = QFont(name, size)
+            f.setStyleStrategy(QFont.PreferAntialias)
+            return f
+    return QFont("Sans", size)
 
 
 class ActivityBar(QWidget):
@@ -16,35 +35,37 @@ class ActivityBar(QWidget):
         layout.setSpacing(4)
 
         self.buttons = []
+        self._icon_font = _emoji_font(18)
 
-        self._add_action("\u2630", 0, "Explorer")       # ☰ hamburger
-        self._add_action("\u2709", 1, "Chat")            # ✉ envelope
-        self._add_action("\u2b07", 2, "Models")          # ⬇ down arrow
-        self._add_action("\u2611", 3, "Plan")            # ☑ ballot box
-        self._add_action("\u2756", 4, "Git")             # ❖ diamond
-        self._add_action("\u2605", 5, "Knowledge")       # ★ star
-        self._add_action("\u270f", 6, "Templates")       # ✏ pencil
-        self._add_action("\u2261", 7, "Analytics")       # ≡ triple bar
-        self._add_action("\u2387", 8, "Branch Tree")     # ⎇ branch
-        self._add_action("\u23f0", 9, "Schedules")       # ⏰ alarm clock
-        self._add_action("\u25d0", 10, "Image Generation") # ◐ circle half
-        self._add_action("\u21c4", 11, "Workflows")      # ⇄ arrows
-        self._add_action("\u2661", 12, "Bookmarks")      # ♡ heart
-        self._add_action("\u2692", 13, "Agent Forge")    # ⚒ hammer+pick
-        self._add_action("\u2302", 14, "Marketplace")    # ⌂ house
-        self._add_action("\u2637", 15, "Delegative Board") # ☷ trigram
-        self._add_action("\u2318", 16, "Fine-tuning Studio") # ⌘ command/tuning
-        self._add_action("\u2620", 17, "Debugger")       # ☠ skull (bug hunting)
-        self._add_action("\u2714", 18, "Testing")        # ✔ check mark
-        self._add_action("\u25b6", 19, "Tasks")          # ▶ play
-        self._add_action("\u2588", 22, "REPL")           # █ terminal block
-        self._add_action("\u2B29", 23, "Extensions")     # ⬩ small diamond
+        self._add_action("\U0001f4c2", 0, "Explorer")          # 📂 folder
+        self._add_action("\U0001f4ac", 1, "Chat")              # 💬 speech bubble
+        self._add_action("\U0001f916", 2, "Models")            # 🤖 robot
+        self._add_action("\U0001f4cb", 3, "Plan")              # 📋 clipboard
+        self._add_action("\U0001f500", 4, "Git")               # 🔀 merge arrows
+        self._add_action("\U0001f9e0", 5, "Knowledge")         # 🧠 brain
+        self._add_action("\U0001f4dd", 6, "Templates")         # 📝 memo
+        self._add_action("\U0001f4ca", 7, "Analytics")         # 📊 bar chart
+        self._add_action("\U0001f333", 8, "Branch Tree")       # 🌳 tree
+        self._add_action("\u23f0", 9, "Schedules")             # ⏰ alarm clock
+        self._add_action("\U0001f3a8", 10, "Image Generation") # 🎨 palette
+        self._add_action("\U0001f504", 11, "Workflows")        # 🔄 cycle arrows
+        self._add_action("\U0001f516", 12, "Bookmarks")        # 🔖 bookmark
+        self._add_action("\u2692\uFE0F", 13, "Agent Forge")    # ⚒️ hammer+pick
+        self._add_action("\U0001f6d2", 14, "Marketplace")      # 🛒 shopping cart
+        self._add_action("\U0001f4cc", 15, "Delegative Board") # 📌 pushpin
+        self._add_action("\U0001f3af", 16, "Fine-tuning Studio") # 🎯 bullseye
+        self._add_action("\U0001f41e", 17, "Debugger")         # 🐞 ladybug
+        self._add_action("\u2705", 18, "Testing")              # ✅ check box
+        self._add_action("\u25b6\uFE0F", 19, "Tasks")          # ▶️ play button
+        self._add_action("\U0001f4bb", 22, "REPL")             # 💻 laptop
+        self._add_action("\U0001f9e9", 23, "Extensions")       # 🧩 puzzle piece
 
         self.spacer = QWidget()
         self.spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout.addWidget(self.spacer)
 
-        settings_btn = QPushButton("\u2699")
+        settings_btn = QPushButton("\u2699\uFE0F")  # ⚙️
+        settings_btn.setFont(self._icon_font)
         settings_btn.setFixedSize(48, 48)
         settings_btn.setToolTip("Settings")
         settings_btn.setStyleSheet(
@@ -56,18 +77,15 @@ class ActivityBar(QWidget):
 
     def add_activity(self, icon, index, tooltip):
         """Public API for adding new activities dynamically (e.g., from plugins)."""
-        # Insert before the spacer
         count = self.layout().count()
         btn = self._add_action(icon, index, tooltip)
-        # Move it to the position before spacer (count - 2)
-        # Actually _add_action adds to the end, which is after settings_btn.
-        # We need to insert it correctly.
         self.layout().removeWidget(btn)
         self.layout().insertWidget(count - 2, btn)
         return btn
 
     def _add_action(self, icon, index, tooltip):
         btn = QPushButton(icon)
+        btn.setFont(self._icon_font)
         btn.setFixedSize(48, 48)
         btn.setToolTip(tooltip)
         btn.setCheckable(True)
@@ -80,9 +98,6 @@ class ActivityBar(QWidget):
         self.layout().addWidget(btn)
         self.buttons.append(btn)
         return btn
-
-        if index == 1:
-            btn.setChecked(True)
 
     def _on_btn_clicked(self, index):
         for i, btn in enumerate(self.buttons):
