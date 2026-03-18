@@ -56,6 +56,7 @@ THEMES = {
             QPushButton:hover { background-color: #4b5263; }
             QPushButton:checked { background-color: #61afef; color: #11151c; border: 1px solid #61afef; }
             QStatusBar, QToolBar { background-color: #21252b; color: #d7dce5; }
+            QToolTip { background-color: #21252b; color: #d7dce5; border: 1px solid #181a1f; padding: 4px; }
         """
     },
     "Monokai": {
@@ -113,6 +114,7 @@ THEMES = {
             QPushButton:hover { background-color: #49483e; }
             QPushButton:checked { background-color: #a6e22e; color: #111; border: 1px solid #a6e22e; }
             QStatusBar, QToolBar { background-color: #1e1f1c; color: #f8f8f2; }
+            QToolTip { background-color: #1e1f1c; color: #f8f8f2; border: 1px solid #000000; padding: 4px; }
         """
     },
     "Github Dark": {
@@ -170,6 +172,7 @@ THEMES = {
             QPushButton:hover { background-color: #30363d; }
             QPushButton:checked { background-color: #2f81f7; color: #ffffff; border: 1px solid #2f81f7; }
             QStatusBar, QToolBar { background-color: #161b22; color: #e6edf3; }
+            QToolTip { background-color: #161b22; color: #e6edf3; border: 1px solid #30363d; padding: 4px; }
         """
     },
     "Synapse Glass": {
@@ -263,6 +266,7 @@ THEMES = {
                 background-color: #238636;
                 border-radius: 2px;
             }
+            QToolTip { background-color: #161b22; color: #e6edf3; border: 1px solid #30363d; padding: 4px; }
         """
     },
     "Github Light": {
@@ -323,6 +327,7 @@ THEMES = {
             QScrollBar:vertical { border: none; background: #f6f8fa; width: 10px; }
             QScrollBar::handle:vertical { background: #d1d9e0; min-height: 20px; border-radius: 5px; }
             QScrollBar::handle:vertical:hover { background: #afb8c1; }
+            QToolTip { background-color: #ffffff; color: #1f2328; border: 1px solid #d1d9e0; padding: 4px; }
         """
     },
 }

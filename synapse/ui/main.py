@@ -360,6 +360,7 @@ class MainWindow(QMainWindow):
         self.task_runner_sidebar.run_task_requested.connect(self.build_manager.run_task)
         self.task_runner_sidebar.stop_task_requested.connect(self.build_manager.stop_task)
         self.task_runner_sidebar.refresh_requested.connect(self.build_manager.load_tasks)
+        self.task_runner_sidebar.open_workspace_requested.connect(lambda: self._on_activity_changed(0))
         self.sidebar_stack.addWidget(self.task_runner_sidebar) # Index 19 (Tasks)
 
         self.build_manager.tasks_loaded.connect(self.task_runner_sidebar.update_tasks)
@@ -388,7 +389,7 @@ class MainWindow(QMainWindow):
         self.docker_manager.images_updated.connect(self.docker_sidebar.update_images)
         self.docker_manager.volumes_updated.connect(self.docker_sidebar.update_volumes)
         self.docker_manager.logs_received.connect(self.docker_sidebar.append_logs)
-        self.docker_manager.error_occurred.connect(lambda err: self.status_label.setText(f"Docker error: {err}"))
+        self.docker_manager.error_occurred.connect(self.docker_sidebar.show_error)
 
         self.lora_manager = LoRAManager(CONFIG_DIR)
         self.fine_tuning_panel = FineTuningPanel(self.lora_manager)
@@ -1259,10 +1260,12 @@ class MainWindow(QMainWindow):
             self.activity_bar, self.sidebar, self.input_widget,
             self.bookmarks_panel, self.workflow_sidebar, self.schedule_sidebar,
             self.knowledge_sidebar, self.plan_panel, self.branch_tree_sidebar,
+            self.agent_forge, self.plugin_sidebar, self.debug_sidebar,
+            self.test_sidebar, self.task_runner_sidebar, self.docker_sidebar,
         ):
             if hasattr(widget, 'apply_theme'):
                 widget.apply_theme(theme)
-        for attr in ('canvas', 'terminal_widget', 'workspace_panel'):
+        for attr in ('canvas', 'terminal_widget', 'workspace_panel', 'pr_sidebar'):
             w = getattr(self, attr, None)
             if w and hasattr(w, 'apply_theme'):
                 w.apply_theme(theme)
@@ -1827,9 +1830,6 @@ class MainWindow(QMainWindow):
 
         any_dirty = any(d.get("dirty", False) for d in self._streaming_data.values())
         if not any_dirty: return
-
-        from PyQt5.QtCore import QUrl
-        import html as html_mod
 
         for pane_idx, data in self._streaming_data.items():
             if not data.get("dirty", False): continue
@@ -3024,11 +3024,11 @@ class MainWindow(QMainWindow):
 
     def _open_compare(self):
         if not self.current_conv or not self.current_conv.get("messages"):
-            self.status_label.setText("Need a conversation to compare")
+            QMessageBox.information(self, "Compare Models", "Select or start a conversation first to compare model responses.")
             return
         models = [self.model_combo.itemText(i) for i in range(self.model_combo.count())]
         if len(models) < 2:
-            self.status_label.setText("Need at least 2 models to compare")
+            QMessageBox.information(self, "Compare Models", "Need at least 2 models available to compare.")
             return
         from PyQt5.QtWidgets import QDialog as _QD
         dlg = QDialog(self)
@@ -4081,7 +4081,6 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getOpenFileName(self, "Import Theme", "", "QSS Files (*.qss);;All (*)")
         if not path:
             return
-        from ..utils.constants import CONFIG_DIR
         themes_dir = CONFIG_DIR / "themes"
         themes_dir.mkdir(parents=True, exist_ok=True)
         name = Path(path).stem

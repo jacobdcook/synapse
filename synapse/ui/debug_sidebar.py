@@ -100,3 +100,16 @@ class DebugSidebar(QWidget):
     def _on_bp_double_clicked(self, item):
         path, line = item.data(Qt.UserRole)
         self.breakpoint_clicked.emit(path, line)
+
+    def apply_theme(self, theme):
+        bg = theme.get("sidebar_bg", "#1e1e1e")
+        fg = theme.get("fg", "#d4d4d4")
+        border = theme.get("border", "#30363d")
+        self.setStyleSheet(f"background-color: {bg};")
+        tree_style = f"QTreeWidget {{ background-color: {bg}; border: none; color: {fg}; }}"
+        list_style = f"QListWidget {{ background-color: {bg}; border: none; color: {fg}; }}"
+        self.vars_tree.setStyleSheet(tree_style)
+        self.stack_list.setStyleSheet(list_style)
+        self.bp_list.setStyleSheet(list_style)
+        for lbl in self.findChildren(QLabel):
+            lbl.setStyleSheet(f"color: {fg}; font-weight: bold; font-size: 11px;")

@@ -143,3 +143,18 @@ class AgentForgeSidebar(QWidget):
                 updated = AgentDefinition.from_dict(data)
                 self.manager.add_agent(updated)
                 self.refresh()
+
+    def apply_theme(self, theme):
+        bg = theme.get("sidebar_bg", "#21252b")
+        fg = theme.get("fg", "#abb2bf")
+        accent = theme.get("accent", "#61afef")
+        border = theme.get("border", "#181a1f")
+        input_bg = theme.get("input_bg", "#21252b")
+        self.setStyleSheet(f"background-color: {bg};")
+        for lbl in self.findChildren(QLabel):
+            lbl.setStyleSheet(f"color: {fg};")
+        self.agent_list.setStyleSheet(f"""
+            QListWidget {{ background: transparent; border: none; color: {fg}; }}
+            QListWidget::item {{ background: {input_bg}; border-radius: 4px; padding: 8px; margin-bottom: 2px; color: {fg}; }}
+            QListWidget::item:selected {{ background: {bg}; border: 1px solid {accent}; color: {fg}; }}
+        """)

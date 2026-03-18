@@ -101,5 +101,12 @@ class TestSidebar(QWidget):
     def _on_item_double_clicked(self, item, col):
         nodeid = item.data(0, Qt.UserRole)
         if nodeid:
-            # Maybe open file at that line?
             self.run_selected_requested.emit([nodeid])
+
+    def apply_theme(self, theme):
+        bg = theme.get("sidebar_bg", "#1e1e1e")
+        fg = theme.get("fg", "#e6edf3")
+        border = theme.get("border", "#30363d")
+        self.setStyleSheet(f"background-color: {bg};")
+        self.tree.setStyleSheet(f"QTreeWidget {{ background: {bg}; color: {fg}; border: none; }}")
+        self.stats_label.setStyleSheet(f"color: {fg}; margin: 5px 10px;")

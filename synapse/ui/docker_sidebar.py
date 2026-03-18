@@ -1,8 +1,10 @@
 import logging
+import webbrowser
 from typing import List, Dict, Any
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QTreeWidget, QTreeWidgetItem,
-    QPushButton, QLabel, QTabWidget, QTextEdit, QMenu, QAction
+    QPushButton, QLabel, QTabWidget, QTextEdit, QMenu, QAction,
+    QHBoxLayout
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 
@@ -24,8 +26,31 @@ class DockerSidebar(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
+        # Error state (shown when Docker not found)
+        self.error_widget = QWidget()
+        error_layout = QVBoxLayout(self.error_widget)
+        error_layout.setContentsMargins(20, 40, 20, 20)
+        self.error_icon = QLabel("Docker Not Found")
+        self.error_icon.setAlignment(Qt.AlignCenter)
+        self.error_icon.setStyleSheet("font-size: 16px; font-weight: bold;")
+        error_layout.addWidget(self.error_icon)
+        self.error_msg = QLabel("Docker CLI is not installed or not in PATH.")
+        self.error_msg.setAlignment(Qt.AlignCenter)
+        self.error_msg.setWordWrap(True)
+        error_layout.addWidget(self.error_msg)
+        error_layout.addSpacing(16)
+        install_btn = QPushButton("Install Docker")
+        install_btn.clicked.connect(lambda: webbrowser.open("https://docs.docker.com/get-docker/"))
+        error_layout.addWidget(install_btn)
+        retry_btn = QPushButton("Retry Detection")
+        retry_btn.clicked.connect(self.refresh_requested.emit)
+        error_layout.addWidget(retry_btn)
+        error_layout.addStretch()
+        self.error_widget.hide()
+        layout.addWidget(self.error_widget)
+
         self.tabs = QTabWidget()
-        
+
         # Containers
         self.container_tree = QTreeWidget()
         self.container_tree.setHeaderLabels(["Name", "Status", "ID"])
@@ -46,7 +71,6 @@ class DockerSidebar(QWidget):
         # Logs
         self.log_view = QTextEdit()
         self.log_view.setReadOnly(True)
-        self.log_view.setStyleSheet("font-family: 'Courier New'; background: #0d1117; color: #e6edf3;")
         self.tabs.addTab(self.log_view, "Logs")
 
         layout.addWidget(self.tabs)
@@ -59,7 +83,19 @@ class DockerSidebar(QWidget):
         controls_layout.addWidget(self.refresh_btn)
         layout.addWidget(controls)
 
+    def show_error(self, message):
+        self.error_msg.setText(message)
+        self.error_widget.show()
+        self.tabs.hide()
+        self.refresh_btn.parentWidget().hide()
+
+    def hide_error(self):
+        self.error_widget.hide()
+        self.tabs.show()
+        self.refresh_btn.parentWidget().show()
+
     def update_containers(self, containers: List[Dict[str, Any]]):
+        self.hide_error()
         self.container_tree.clear()
         for c in containers:
             item = QTreeWidgetItem(self.container_tree, [
@@ -95,7 +131,7 @@ class DockerSidebar(QWidget):
         item = self.container_tree.itemAt(pos)
         if not item:
             return
-        
+
         container = item.data(0, Qt.UserRole)
         cid = container.get("ID")
         status = container.get("Status", "").lower()
@@ -119,6 +155,14 @@ class DockerSidebar(QWidget):
     def apply_theme(self, theme):
         bg = theme.get("sidebar_bg", "#1e1e1e")
         fg = theme.get("fg", "#e6edf3")
-        self.container_tree.setStyleSheet(f"QTreeWidget {{ background: {bg}; color: {fg}; border: none; }}")
-        self.image_tree.setStyleSheet(f"QTreeWidget {{ background: {bg}; color: {fg}; border: none; }}")
-        self.volume_tree.setStyleSheet(f"QTreeWidget {{ background: {bg}; color: {fg}; border: none; }}")
+        border = theme.get("border", "#30363d")
+        accent = theme.get("accent", "#58a6ff")
+        input_bg = theme.get("input_bg", "#1e1e1e")
+        tree_style = f"QTreeWidget {{ background: {bg}; color: {fg}; border: none; }}"
+        self.container_tree.setStyleSheet(tree_style)
+        self.image_tree.setStyleSheet(tree_style)
+        self.volume_tree.setStyleSheet(tree_style)
+        self.log_view.setStyleSheet(f"font-family: 'Courier New'; background: {input_bg}; color: {fg};")
+        self.error_icon.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {fg};")
+        self.error_msg.setStyleSheet(f"color: {fg};")
+        self.setStyleSheet(f"background-color: {bg};")

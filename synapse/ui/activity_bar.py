@@ -22,7 +22,7 @@ class ActivityBar(QWidget):
         self._add_action("\u2b07", 2, "Models")
         self._add_action("\U0001f4cb", 3, "Plan") # Clipboard icon
         self._add_action("\u2756", 4, "Git")
-        self._add_action("\u26c4", 5, "Knowledge")
+        self._add_action("\U0001f9e0", 5, "Knowledge")
         self._add_action("\u270f", 6, "Templates") # Pencil icon
         self._add_action("\U0001f4ca", 7, "Analytics") # Bar chart icon
         self._add_action("\u22d4", 8, "Branch Tree")
@@ -31,12 +31,12 @@ class ActivityBar(QWidget):
         self._add_action("\u21c4", 11, "Workflows")
         self._add_action("\U0001f516", 12, "Bookmarks")
         self._add_action("\u2692", 13, "Agent Forge") # Hammer and pick
-        self._add_action("\U0001f6d2", 14, "Marketplace") # Shopping cart
+        self._add_action("\U0001f3ea", 14, "Marketplace") # Store
         self._add_action("\U0001f5d2", 15, "Delegative Board") # Spiral notepad
         self._add_action("\U0001f3af", 16, "Fine-tuning Studio") # Bullseye
         self._add_action("\U0001f41e", 17, "Debugger") # Ladybug (Debug)
         self._add_action("\u2697", 18, "Testing") # Beaker icon (Testing)
-        self._add_action("\u2692", 19, "Tasks") # Hammer and pick (Tasks)
+        self._add_action("\u25b6", 19, "Tasks") # Play/run
         self._add_action("\u2328", 22, "REPL") # Keyboard icon (REPL)
         self._add_action("\ud83e\udde9", 23, "Extensions") # Puzzle piece
 
@@ -94,7 +94,10 @@ class ActivityBar(QWidget):
         border = theme.get("border", "#1e1e1e")
         accent = theme.get("accent", "#ffffff")
         fg = theme.get("fg", "#858585")
-        self.setStyleSheet(f"background-color: {bg}; border-right: 1px solid {border};")
+        self.setStyleSheet(
+            f"background-color: {bg}; border-right: 1px solid {border};"
+            f" QToolTip {{ background-color: {bg}; color: {accent}; border: 1px solid {border}; padding: 4px; }}"
+        )
         btn_style = (
             f"QPushButton {{ background: transparent; border: none; font-size: 20px; color: {fg}; }}"
             f"QPushButton:hover {{ color: {accent}; }}"

@@ -121,4 +121,10 @@ class NotebookEditor(QWidget):
     def apply_theme(self, theme):
         bg = theme.get("bg", "#1e1e1e")
         fg = theme.get("fg", "#d4d4d4")
+        input_bg = theme.get("input_bg", "#1e1e1e")
+        border = theme.get("border", "#30363d")
         self.setStyleSheet(f"background: {bg}; color: {fg};")
+        for cell in self.cells:
+            cell.editor.setStyleSheet(f"font-family: 'Courier New'; background: {input_bg}; color: {fg};")
+            cell.output_area.setStyleSheet(f"background: {input_bg}; color: {fg}; padding: 5px;")
+            cell.setStyleSheet(f"QFrame {{ border: 1px solid {border}; background: {bg}; }}")
