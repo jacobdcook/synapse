@@ -414,20 +414,22 @@ class InputWidget(QWidget):
         self.attach_btn.clicked.connect(self._pick_file)
         input_row.addWidget(self.attach_btn, alignment=Qt.AlignBottom)
 
-        self.agent_mode_btn = QPushButton("⚡")
+        self.agent_mode_btn = QPushButton("AG")
         self.agent_mode_btn.setCheckable(True)
-        self.agent_mode_btn.setToolTip("Agent Mode: AI autonomously uses tools in a loop")
-        self.agent_mode_btn.setFixedSize(32, 32)
+        self.agent_mode_btn.setToolTip("Agent Mode: AI autonomously chains tool calls in a loop")
+        self.agent_mode_btn.setFixedSize(36, 32)
         self.agent_mode_btn.setStyleSheet("""
             QPushButton {
                 background-color: transparent;
                 border: 1px solid #444;
                 border-radius: 6px;
-                font-size: 16px;
+                font-size: 11px;
+                font-weight: bold;
                 color: #888;
             }
             QPushButton:hover {
                 background-color: #333;
+                color: #ccc;
             }
             QPushButton:checked {
                 background-color: #f1c40f;
