@@ -1,4 +1,5 @@
 import os
+import platform
 import json
 import logging
 from pathlib import Path
@@ -13,15 +14,26 @@ ORG_NAME = "JacobCook"
 
 # Paths
 HOME_DIR = Path.home()
-CONFIG_DIR = HOME_DIR / ".local" / "share" / "synapse"
+SYSTEM = platform.system()
+
+if SYSTEM == "Windows":
+    CONFIG_DIR = Path(os.environ.get("APPDATA", HOME_DIR)) / "Synapse"
+elif SYSTEM == "Darwin":
+    CONFIG_DIR = HOME_DIR / "Library" / "Application Support" / "Synapse"
+else:
+    # Linux/Other
+    CONFIG_DIR = HOME_DIR / ".local" / "share" / "synapse"
+
 CONV_DIR = CONFIG_DIR / "conversations"
 SETTINGS_FILE = CONFIG_DIR / "settings.json"
 DRAFT_FILE = CONFIG_DIR / "draft.txt"
 
 TEMPLATE_DIR = CONFIG_DIR / "templates"
+PLUGINS_DIR = CONFIG_DIR / "plugins"
+PLUGIN_SETTINGS_FILE = CONFIG_DIR / "plugin_settings.json"
 
 # Create directories if they don't exist
-for d in [CONFIG_DIR, CONV_DIR, TEMPLATE_DIR]:
+for d in [CONFIG_DIR, CONV_DIR, TEMPLATE_DIR, PLUGINS_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
 # Model Recommendations
@@ -144,18 +156,21 @@ def detect_mime(data_or_path):
     if isinstance(data_or_path, str) and len(data_or_path) > 260:
         import base64
         try:
-            header = base64.b64decode(data_or_path[:32])
+            sample = data_or_path[:64]
+            header = base64.b64decode(sample)
         except Exception:
             header = b""
-        if header[:8] == b'\x89PNG\r\n\x1a\n':
+        
+        if header.startswith(b'\x89PNG\r\n\x1a\n'):
             return "image/png"
-        if header[:2] == b'\xff\xd8':
+        if header.startswith(b'\xff\xd8'):
             return "image/jpeg"
-        if header[:4] == b'GIF8':
+        if header.startswith(b'GIF8'):
             return "image/gif"
-        if header[:4] == b'RIFF' and header[8:12] == b'WEBP':
+        if header.startswith(b'RIFF') and b'WEBP' in header:
             return "image/webp"
         return "image/png"
+    
     mime, _ = mimetypes.guess_type(str(data_or_path))
     return mime or "application/octet-stream"
 def format_time(iso_str):

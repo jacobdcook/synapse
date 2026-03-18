@@ -10,6 +10,7 @@ from PyQt5.QtCore import Qt, pyqtSignal, QFileSystemWatcher
 from PyQt5.QtGui import QKeySequence
 from .editor import CodeEditor, FindReplaceBar
 from .markdown_preview import MarkdownPreview
+from .notebook_editor import NotebookEditor
 
 log = logging.getLogger(__name__)
 
@@ -136,6 +137,7 @@ class EditorTabs(QTabWidget):
         self.setMovable(True)
         self.tabCloseRequested.connect(self.close_tab)
         self._find_bars = {}
+        self.notebook_manager = None
 
     def open_file(self, filepath):
         filepath = str(filepath)
@@ -154,27 +156,32 @@ class EditorTabs(QTabWidget):
             layout.setContentsMargins(0, 0, 0, 0)
             layout.setSpacing(0)
 
-            editor = CodeEditor()
-            editor.setPlainText(content)
-            editor.mark_saved()
-            editor.set_language_from_filename(filepath)
-            editor.content_modified.connect(lambda fp=filepath: self._on_modified(fp))
-
-            find_bar = FindReplaceBar(editor)
-            layout.addWidget(find_bar)
-
-            is_md = filepath.lower().endswith(('.md', '.markdown'))
-            if is_md:
-                splitter = QSplitter(Qt.Horizontal)
-                splitter.addWidget(editor)
-                preview = MarkdownPreview()
-                preview.update_preview(content)
-                splitter.addWidget(preview)
-                splitter.setSizes([500, 500])
-                layout.addWidget(splitter)
-                editor.textChanged.connect(lambda e=editor, p=preview: p.update_preview(e.toPlainText()))
-            else:
+            is_nb = filepath.lower().endswith(('.ipynb', '.synb'))
+            if is_nb and self.notebook_manager:
+                editor = NotebookEditor(self.notebook_manager, filepath)
                 layout.addWidget(editor)
+            else:
+                editor = CodeEditor()
+                editor.setPlainText(content)
+                editor.mark_saved()
+                editor.set_language_from_filename(filepath)
+                editor.content_modified.connect(lambda fp=filepath: self._on_modified(fp))
+
+                find_bar = FindReplaceBar(editor)
+                layout.addWidget(find_bar)
+
+                is_md = filepath.lower().endswith(('.md', '.markdown'))
+                if is_md:
+                    splitter = QSplitter(Qt.Horizontal)
+                    splitter.addWidget(editor)
+                    preview = MarkdownPreview()
+                    preview.update_preview(content)
+                    splitter.addWidget(preview)
+                    splitter.setSizes([500, 500])
+                    layout.addWidget(splitter)
+                    editor.textChanged.connect(lambda e=editor, p=preview: p.update_preview(e.toPlainText()))
+                else:
+                    layout.addWidget(editor)
 
             name = Path(filepath).name
             idx = self.addTab(container, name)
@@ -190,9 +197,15 @@ class EditorTabs(QTabWidget):
             log.error(f"Failed to open file {filepath}: {e}")
             return None
 
+    def current_editor(self):
+        return self._get_editor(self.currentIndex())
+
     def _get_editor(self, index):
         container = self.widget(index)
         if container:
+            nb_editor = container.findChild(NotebookEditor)
+            if nb_editor:
+                return nb_editor
             return container.findChild(CodeEditor)
         return None
 

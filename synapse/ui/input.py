@@ -53,12 +53,20 @@ class _FileCompleter(QListWidget):
         self.setFocusPolicy(Qt.NoFocus)
         self.setMaximumHeight(200)
         self.setStyleSheet(
-            "QListWidget { background: #1e1e1e; color: #e6edf3; border: 1px solid #444; "
-            "font-family: monospace; font-size: 12px; }"
-            "QListWidget::item:selected { background: #264f78; }"
+            "QListWidget { background: #252526; color: #cccccc; border: 1px solid #454545; "
+            "font-family: 'Segoe UI', sans-serif; font-size: 11px; outline: none; }"
+            "QListWidget::item { padding: 4px 8px; border-bottom: 1px solid #333333; }"
+            "QListWidget::item:selected { background: #094771; color: white; }"
+            "QListWidget::item:hover { background: #2a2d2e; }"
         )
         self.itemActivated.connect(self._on_activated)
         self._all_files = []
+        self._icons = {
+            "folder": "\ud83d\udcc1",
+            "file": "\ud83d\udcc4",
+            "python": "\ud83d\udc0d",
+            "markdown": "\ud83d\udcd1"
+        }
 
     def set_files(self, file_list):
         self._all_files = sorted(file_list)
@@ -66,24 +74,49 @@ class _FileCompleter(QListWidget):
     def show_completions(self, prefix, pos):
         self.clear()
         prefix_lower = prefix.lower()
-        matches = [f for f in self._all_files if prefix_lower in f.lower()][:20]
+        
+        # Special mentions
+        specials = ["terminal"]
+        matched_specials = [s for s in specials if prefix_lower in s]
+        
+        # File matches
+        matched_files = [f for f in self._all_files if prefix_lower in f.lower()][:20]
+        matches = matched_specials + matched_files
+        
         if not matches:
             self.hide()
             return
+            
         for f in matches:
-            self.addItem(QListWidgetItem(f))
+            if f == "terminal":
+                icon = "\ud83d\udda5"
+            elif "." not in f: icon = self._icons["folder"]
+            elif f.endswith(".py"): icon = self._icons["python"]
+            elif f.endswith(".md"): icon = self._icons["markdown"]
+            else: icon = self._icons["file"]
+            
+            item = QListWidgetItem(f"{icon}  {f}")
+            item.setData(Qt.UserRole, f)
+            self.addItem(item)
+            
         self.setCurrentRow(0)
-        self.move(pos)
+        
+        # Calculate height based on items
+        h = min(200, self.count() * 26 + 4)
+        self.resize(300, h)
+        
+        # Position above or below cursor depending on space
+        self.move(pos.x(), pos.y() - h - 5)
         self.show()
 
     def _on_activated(self, item):
-        self.file_selected.emit(item.text())
+        self.file_selected.emit(item.data(Qt.UserRole))
         self.hide()
 
     def select_current(self):
         current = self.currentItem()
         if current:
-            self.file_selected.emit(current.text())
+            self.file_selected.emit(current.data(Qt.UserRole))
         self.hide()
 
     def move_selection(self, direction):
@@ -96,18 +129,21 @@ class _SlashCompleter(QListWidget):
     command_selected = pyqtSignal(str)
 
     COMMANDS = [
-        ("/clear", "Start a new chat"),
-        ("/model", "Switch model"),
-        ("/system", "Edit system prompt"),
-        ("/search", "Search workspace"),
-        ("/summarize", "Summarize to free context"),
-        ("/replay", "Step-by-step session playback"),
-        ("/export", "Export conversation (md|html|json|pdf)"),
-        ("/stats", "Show conversation stats"),
-        ("/mcp", "Show/toggle MCP servers"),
-        ("/rag", "Toggle RAG context injection"),
-        ("/memory", "View/clear persistent memory"),
-        ("/help", "Show all commands & shortcuts"),
+        ("/clear", "Start a new chat session"),
+        ("/model", "Switch the active AI model"),
+        ("/system", "Edit the hidden system prompt"),
+        ("/search", "Semantic search across workspace"),
+        ("/summarize", "Summarize current thread to save context"),
+        ("/replay", "Playback previous session steps"),
+        ("/export", "Export chat as MD, HTML, or JSON"),
+        ("/stats", "Show token and message statistics"),
+        ("/mcp", "Manage Model Context Protocol servers"),
+        ("/rag", "Toggle RAG (Knowledge Retrieval)"),
+        ("/memory", "Manage AI's long-term memory"),
+        ("/diff", "View changes in the active file"),
+        ("/file", "Open a specific file in the editor"),
+        ("/terminal", "Focus the integrated terminal"),
+        ("/help", "Show all commands and shortcuts"),
     ]
 
     def __init__(self, parent=None):
@@ -117,10 +153,11 @@ class _SlashCompleter(QListWidget):
         self.setFocusPolicy(Qt.NoFocus)
         self.setMaximumHeight(250)
         self.setStyleSheet(
-            "QListWidget { background: #1e1e1e; color: #e6edf3; border: 1px solid #444; "
-            "font-family: monospace; font-size: 12px; }"
-            "QListWidget::item:selected { background: #264f78; }"
-            "QListWidget::item { padding: 4px 8px; }"
+            "QListWidget { background: #252526; color: #cccccc; border: 1px solid #454545; "
+            "font-family: 'Segoe UI', sans-serif; font-size: 11px; outline: none; }"
+            "QListWidget::item { padding: 6px 10px; border-bottom: 1px solid #333333; }"
+            "QListWidget::item:selected { background: #094771; color: white; }"
+            "QListWidget::item:hover { background: #2a2d2e; }"
         )
         self.itemActivated.connect(self._on_activated)
 
@@ -138,7 +175,8 @@ class _SlashCompleter(QListWidget):
         self.setCurrentRow(0)
         h = min(250, len(matches) * 28 + 4)
         self.resize(350, h)
-        self.move(pos.x(), pos.y() - h)
+        # Position above cursor
+        self.move(pos.x(), pos.y() - h - 5)
         self.show()
 
     def _on_activated(self, item):
@@ -251,14 +289,18 @@ class _ChatTextEdit(QPlainTextEdit):
         col = cursor.positionInBlock()
         at_pos = text.rfind("@", 0, col)
         if at_pos < 0:
+            if self._completer_visible: self.completer_dismiss.emit()
             return
-        if at_pos > 0 and text[at_pos - 1] not in (' ', '\t', ''):
+        # Must be at start of block or preceded by space
+        if at_pos > 0 and text[at_pos - 1] not in (' ', '\t'):
+            if self._completer_visible: self.completer_dismiss.emit()
             return
         prefix = text[at_pos + 1:col]
         if ' ' in prefix:
+            if self._completer_visible: self.completer_dismiss.emit()
             return
         rect = self.cursorRect()
-        global_pos = self.mapToGlobal(rect.bottomLeft())
+        global_pos = self.mapToGlobal(rect.topLeft()) # Use topLeft for better alignment with "above cursor" move
         self.at_mention_requested.emit(prefix, global_pos)
 
     def _check_slash(self):
@@ -271,7 +313,7 @@ class _ChatTextEdit(QPlainTextEdit):
             return
         prefix = text[:col]
         rect = self.cursorRect()
-        global_pos = self.mapToGlobal(rect.bottomLeft())
+        global_pos = self.mapToGlobal(rect.topLeft())
         self.slash_requested.emit(prefix, global_pos)
 
 
@@ -371,6 +413,29 @@ class InputWidget(QWidget):
         self.attach_btn.setToolTip("Attach image or file (drag & drop also works)")
         self.attach_btn.clicked.connect(self._pick_file)
         input_row.addWidget(self.attach_btn, alignment=Qt.AlignBottom)
+
+        self.agent_mode_btn = QPushButton("⚡")
+        self.agent_mode_btn.setCheckable(True)
+        self.agent_mode_btn.setToolTip("Agent Mode: AI autonomously uses tools in a loop")
+        self.agent_mode_btn.setFixedSize(32, 32)
+        self.agent_mode_btn.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                border: 1px solid #444;
+                border-radius: 6px;
+                font-size: 16px;
+                color: #888;
+            }
+            QPushButton:hover {
+                background-color: #333;
+            }
+            QPushButton:checked {
+                background-color: #f1c40f;
+                color: #2c3e50;
+                border: 1px solid #f1c40f;
+            }
+        """)
+        input_row.addWidget(self.agent_mode_btn, alignment=Qt.AlignBottom)
 
         self.text_edit = _ChatTextEdit(self._submit)
         self.text_edit.setPlaceholderText("Type a message... (Enter to send, Shift+Enter for new line, @ to mention file)")
@@ -806,10 +871,12 @@ class InputWidget(QWidget):
         col = cursor.positionInBlock()
         at_pos = text.rfind("@", 0, col)
         if at_pos >= 0:
+            cursor.beginEditBlock()
             cursor.movePosition(cursor.StartOfBlock)
             cursor.movePosition(cursor.Right, cursor.MoveAnchor, at_pos)
             cursor.movePosition(cursor.Right, cursor.KeepAnchor, col - at_pos)
             cursor.insertText(f"@{filename} ")
+            cursor.endEditBlock()
         self.text_edit.setFocus()
 
     def _insert_slash_command(self, command):

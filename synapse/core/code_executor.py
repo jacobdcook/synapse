@@ -33,14 +33,34 @@ class CodeExecutor:
         code_path.write_text(wrapped_code)
 
         try:
-            result = subprocess.run(
+            # Use Popen for better control over termination
+            process = subprocess.Popen(
                 [sys.executable, str(code_path)],
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
                 cwd=str(self.workspace_dir),
-                timeout=30,
-                start_new_session=True
+                start_new_session=(os.name != 'nt')
             )
+            
+            try:
+                stdout, stderr = process.communicate(timeout=30)
+                exit_code = process.returncode
+            except subprocess.TimeoutExpired:
+                if os.name == 'nt':
+                    # Windows termination
+                    subprocess.run(['taskkill', '/F', '/T', '/PID', str(process.pid)], 
+                                    capture_output=True, check=False)
+                else:
+                    # POSIX termination
+                    os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                
+                return {
+                    "stdout": "",
+                    "stderr": "Execution timed out (30s limit).",
+                    "exit_code": -1,
+                    "images": []
+                }
 
             # Collect any generated images
             images = []
@@ -52,24 +72,19 @@ class CodeExecutor:
                     log.error(f"Failed to read generated image {img_path}: {e}")
 
             return {
-                "stdout": result.stdout,
-                "stderr": result.stderr,
-                "exit_code": result.returncode,
+                "stdout": stdout,
+                "stderr": stderr,
+                "exit_code": exit_code,
                 "images": images
             }
 
-        except subprocess.TimeoutExpired as e:
-            try:
-                os.killpg(os.getpgid(e.args[0].pid if hasattr(e, 'args') and e.args else 0), signal.SIGKILL)
-            except (ProcessLookupError, OSError, AttributeError):
-                pass
-            return {
-                "stdout": "",
-                "stderr": "Execution timed out (30s limit).",
-                "exit_code": -1,
-                "images": []
-            }
         except Exception as e:
+            # Cleanup process if still running
+            try:
+                if 'process' in locals() and process.poll() is None:
+                    process.kill()
+            except:
+                pass
             return {
                 "stdout": "",
                 "stderr": f"Execution error: {str(e)}",

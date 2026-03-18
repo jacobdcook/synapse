@@ -8,7 +8,7 @@ import platform
 import socket
 from pathlib import Path
 from PyQt5.QtCore import QObject, pyqtSignal
-from ..utils.constants import CONFIG_DIR, DEFAULT_SD_URL, DEFAULT_COMFYUI_URL
+from ..utils.constants import CONFIG_DIR, DEFAULT_SD_URL, DEFAULT_COMFYUI_URL, SYSTEM
 
 log = logging.getLogger(__name__)
 
@@ -91,13 +91,16 @@ class BackendManager(QObject):
         
         self.install_progress.emit("sd", 40, "Creating virtual environment...")
         venv_dir = target_dir / "venv"
-        subprocess.run(["python3", "-m", "venv", str(venv_dir)], check=True)
+        import sys
+        subprocess.run([sys.executable, "-m", "venv", str(venv_dir)], check=True)
         
         self.install_progress.emit("sd", 60, "Installing dependencies (this may take several minutes)...")
         # In SD Forge, usually running webui.sh handles the rest, but we might want to pre-install some bits
         # or just let the first run handle it. For now, let's mark it as done after cloning.
         # Actually, let's try to install base requirements.
-        pip_path = venv_dir / "bin" / "pip"
+        pip_name = "pip.exe" if SYSTEM == "Windows" else "pip"
+        scripts_dir = "Scripts" if SYSTEM == "Windows" else "bin"
+        pip_path = venv_dir / scripts_dir / pip_name
         subprocess.run([str(pip_path), "install", "--upgrade", "pip"], check=True)
         
     def _install_comfy(self):
@@ -109,10 +112,13 @@ class BackendManager(QObject):
         
         self.install_progress.emit("comfy", 40, "Creating virtual environment...")
         venv_dir = target_dir / "venv"
-        subprocess.run(["python3", "-m", "venv", str(venv_dir)], check=True)
+        import sys
+        subprocess.run([sys.executable, "-m", "venv", str(venv_dir)], check=True)
         
         self.install_progress.emit("comfy", 60, "Installing dependencies...")
-        pip_path = venv_dir / "bin" / "pip"
+        pip_name = "pip.exe" if SYSTEM == "Windows" else "pip"
+        scripts_dir = "Scripts" if SYSTEM == "Windows" else "bin"
+        pip_path = venv_dir / scripts_dir / pip_name
         requirements = target_dir / "requirements.txt"
         subprocess.run([str(pip_path), "install", "-r", str(requirements)], check=True)
 
@@ -140,7 +146,9 @@ class BackendManager(QObject):
 
     def _start_sd(self):
         target_dir = BACKENDS_DIR / "stable-diffusion-webui-forge"
-        python_exe = target_dir / "venv" / "bin" / "python3"
+        python_name = "python.exe" if SYSTEM == "Windows" else "python3"
+        scripts_dir = "Scripts" if SYSTEM == "Windows" else "bin"
+        python_exe = target_dir / "venv" / scripts_dir / python_name
         launch_py = target_dir / "launch.py"
         
         # Add --api and --listen to ensure it works with Synapse
@@ -158,7 +166,9 @@ class BackendManager(QObject):
 
     def _start_comfy(self):
         target_dir = BACKENDS_DIR / "ComfyUI"
-        python_exe = target_dir / "venv" / "bin" / "python3"
+        python_name = "python.exe" if SYSTEM == "Windows" else "python3"
+        scripts_dir = "Scripts" if SYSTEM == "Windows" else "bin"
+        python_exe = target_dir / "venv" / scripts_dir / python_name
         script = target_dir / "main.py"
         
         args = [str(python_exe), str(script), "--listen", "127.0.0.1", "--port", "8188"]

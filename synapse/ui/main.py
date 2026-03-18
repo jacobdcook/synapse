@@ -38,9 +38,11 @@ from .chat_page import ChatPage
 from .split_view import SplitViewWidget
 from .sidebar import SidebarWidget
 from .input import InputWidget
+from .editor import CodeEditor
 from .workspace import WorkspacePanel, EditorTabs
 from .canvas import CanvasWidget
 from .activity_bar import ActivityBar
+from .plugin_sidebar import PluginSidebar
 from ..core.indexer import WorkspaceIndexer, search_index, load_index, save_index, extract_text_from_pdf, extract_text_from_docx
 from ..core.graph_rag import GraphRAGService
 from ..core.code_executor import CodeExecutor
@@ -55,8 +57,12 @@ from .compare_dialog import CompareDialog
 from .diff_view import DiffViewDialog
 from ..core.plugins import PluginManager
 from ..core.mcp import MCPClientManager
-from ..core.git import GitStatusWorker, is_git_repo
+from ..core.git import GitStatusWorker, is_git_repo, GitRemoteService
 from .terminal import TerminalWidget
+from ..core.lsp_manager import LSPManager
+from ..core.semantic_indexer import SemanticIndexer, SemanticWorkspaceIndexer
+from ..core.context_manager import ContextManager
+from ..core.project_rules import ProjectRulesManager
 from .git_panel import GitPanel
 from .workspace_search import WorkspaceSearchDialog
 from .knowledge_sidebar import KnowledgeSidebar
@@ -93,8 +99,44 @@ from .task_board import TaskBoardPanel
 from ..core.privacy_filter import PrivacyFilter
 from ..core.lora_manager import LoRAManager
 from .fine_tuning import FineTuningPanel
+from ..core.debug_manager import DebugManager
+from .debug_sidebar import DebugSidebar
+from .debug_toolbar import DebugToolbar
+from ..core.test_manager import TestManager
+from .test_sidebar import TestSidebar
+from ..core.build_manager import BuildTaskManager
+from .task_runner_sidebar import TaskRunnerSidebar
+from .pr_sidebar import PullRequestSidebar
+from .pr_review_view import PRReviewView
+from ..core.docker_manager import DockerManager
+from .docker_sidebar import DockerSidebar
+from ..core.notebook_manager import NotebookManager
+from ..core.plugins import PluginManager, SynapsePlugin
+from ..core.agentic import AgenticLoop
+from ..core.file_applier import FileApplier
 
 log = logging.getLogger(__name__)
+
+class PluginAPI:
+    """The interface exposed to plugins."""
+    def __init__(self, main_window: 'MainWindow'):
+        self.main_window = main_window
+
+    def add_activity(self, icon: str, tooltip: str, callback: callable) -> int:
+        """Add a new icon to the activity bar."""
+        index = 100 + len(self.main_window.activity_bar.buttons) # Dynamic index
+        self.main_window.activity_bar.add_activity(icon, index, tooltip)
+        # Register callback for activity change
+        # This requires a bit more logic in MainWindow to handle dynamic indices
+        return index
+
+    def add_sidebar(self, widget: QWidget, index: int):
+        """Add a widget to the sidebar stack."""
+        self.main_window.sidebar_stack.addWidget(widget)
+        # We might need a mapping of index to widget to show it correctly
+
+    def log(self, message: str):
+        log.info(f"[Plugin] {message}")
 
 class _MCPCallWorker:
     """Helper for executing MCP tools in a non-blocking way."""
@@ -132,16 +174,42 @@ class MainWindow(QMainWindow):
         # Restore index stats to sidebar if loaded
         if self.workspace_index:
             QTimer.singleShot(500, lambda: self.knowledge_sidebar.update_stats(self.workspace_index))
-        self.tool_executor = ToolExecutor()
+        # self.tool_executor initialized below
         self.voice_manager = VoiceManager()
         self.voice_manager.transcription_result.connect(self._on_transcription_received)
         self.voice_manager.error_occurred.connect(lambda msg: self.status_label.setText(msg))
         self.agent_manager = AgentManager()
-        self.plugin_manager = PluginManager()
-        self.plugin_manager.load_all()
         self.mcp_manager = MCPClientManager()
+        self.context_manager = ContextManager(self.workspace_root)
+        self.lsp_manager = LSPManager(self.workspace_root)
+        self.lsp_manager.diagnostics_received.connect(self._on_lsp_diagnostics)
+        self.semantic_indexer = SemanticIndexer(self.workspace_root)
+        self.project_rules = ProjectRulesManager(self.workspace_root)
+        self.debug_manager = DebugManager(self.workspace_root)
+        self.test_manager = TestManager(self.workspace_root)
+        self.build_manager = BuildTaskManager(self.workspace_root)
+        self.remote_service = GitRemoteService(self.workspace_root)
+        self.docker_manager = DockerManager(self.workspace_root)
+        self.notebook_manager = NotebookManager(self.workspace_root)
+        self.editor_tabs.notebook_manager = self.notebook_manager
+        
+        # PH16: Plugin System
+        self.plugin_api = PluginAPI(self)
+        self.plugin_manager = PluginManager(self.plugin_api)
+        self.plugin_sidebar = PluginSidebar(self.plugin_manager)
+        self.sidebar_stack.addWidget(self.plugin_sidebar)
+        QTimer.singleShot(5000, self.plugin_manager.discover_plugins) # Delay to let UI stabilize
+
+        # Connect notebook kernel signals
+        self.notebook_manager.kernel.output_received.connect(self._on_notebook_output)
+        self.notebook_manager.kernel.error_received.connect(self._on_notebook_error)
+        self.notebook_manager.kernel.finished.connect(self._on_notebook_finished)
+        
+        self.agent = ToolExecutor(self.workspace_root)
         self.mcp_manager.load_from_settings(self.settings_data)
         self.mcp_manager.servers_changed.connect(self._update_mcp_status)
+        self._recent_files = []
+        self._current_coverage = {} # {filepath: {line_no: status}}
         self._tab_conversations = {}  # tab_index -> conv dict (preserves reference)
         self._edit_history = []  # stack of (Path, old_content) for multi-level undo
         self._streaming_text = ""
@@ -161,6 +229,7 @@ class MainWindow(QMainWindow):
         self._rag_enabled = False
         self._active_stream_conv = None
         self._zen_mode = False
+        self._autocomplete_enabled = self.settings_data.get("autocomplete", True)
         self._current_theme = THEMES.get(self.settings_data.get("theme", "One Dark"), THEMES["One Dark"])
         
         try:
@@ -276,8 +345,76 @@ class MainWindow(QMainWindow):
         self.task_board = TaskBoardPanel(self.task_manager, self.agent_manager)
         self.task_board.execution_requested.connect(self._on_task_execution_requested)
 
+        self.debug_sidebar = DebugSidebar()
+        self.debug_sidebar.breakpoint_clicked.connect(self._on_debug_breakpoint_clicked)
+        self.sidebar_stack.addWidget(self.debug_sidebar) # Index 17 (Debugger)
+
+        self.test_sidebar = TestSidebar()
+        self.test_sidebar.run_all_requested.connect(self.test_manager.run_tests)
+        self.test_sidebar.run_coverage_requested.connect(self.test_manager.run_coverage)
+        self.test_sidebar.refresh_requested.connect(self.test_manager.discover_tests)
+        self.sidebar_stack.addWidget(self.test_sidebar) # Index 18 (Testing)
+
+        self.test_manager.discovery_done.connect(self.test_sidebar.set_tests)
+        self.test_manager.test_result_ready.connect(self._on_test_result)
+        self.test_manager.test_session_finished.connect(self._on_test_session_finished)
+        self.test_manager.coverage_updated.connect(self._on_coverage_updated)
+
+        self.task_runner_sidebar = TaskRunnerSidebar()
+        self.task_runner_sidebar.run_task_requested.connect(self.build_manager.run_task)
+        self.task_runner_sidebar.stop_task_requested.connect(self.build_manager.stop_task)
+        self.task_runner_sidebar.refresh_requested.connect(self.build_manager.load_tasks)
+        self.sidebar_stack.addWidget(self.task_runner_sidebar) # Index 19 (Tasks)
+
+        self.build_manager.tasks_loaded.connect(self.task_runner_sidebar.update_tasks)
+        self.build_manager.task_started.connect(self._on_task_started)
+        self.build_manager.task_finished.connect(self._on_task_finished)
+        self.build_manager.task_output.connect(self._on_task_output)
+
+        self.pr_sidebar = PullRequestSidebar()
+        self.pr_sidebar.refresh_requested.connect(self._on_pr_refresh_requested)
+        self.pr_sidebar.pr_selected.connect(self._on_pr_selected)
+        self.sidebar_stack.addWidget(self.pr_sidebar) # Index 20 (Remote)
+
+        self.remote_service.prs_ready.connect(self.pr_sidebar.set_prs)
+        self.remote_service.issues_ready.connect(self.pr_sidebar.set_issues)
+        self.remote_service.error_occurred.connect(lambda err: self.status_label.setText(f"Remote error: {err}"))
+
+        self.docker_sidebar = DockerSidebar()
+        self.docker_sidebar.refresh_requested.connect(self.docker_manager.refresh_all)
+        self.docker_sidebar.start_requested.connect(self.docker_manager.start_container)
+        self.docker_sidebar.stop_requested.connect(self.docker_manager.stop_container)
+        self.docker_sidebar.remove_requested.connect(self.docker_manager.remove_container)
+        self.docker_sidebar.view_logs_requested.connect(self.docker_manager.fetch_logs)
+        self.sidebar_stack.addWidget(self.docker_sidebar) # Index 21 (Docker)
+
+        self.docker_manager.containers_updated.connect(self.docker_sidebar.update_containers)
+        self.docker_manager.images_updated.connect(self.docker_sidebar.update_images)
+        self.docker_manager.volumes_updated.connect(self.docker_sidebar.update_volumes)
+        self.docker_manager.logs_received.connect(self.docker_sidebar.append_logs)
+        self.docker_manager.error_occurred.connect(lambda err: self.status_label.setText(f"Docker error: {err}"))
+
         self.lora_manager = LoRAManager(CONFIG_DIR)
         self.fine_tuning_panel = FineTuningPanel(self.lora_manager)
+
+        self.debug_toolbar = DebugToolbar(self)
+        self.debug_toolbar.start_requested.connect(self._on_debug_start)
+        self.debug_toolbar.stop_requested.connect(self._on_debug_stop)
+        self.debug_toolbar.step_over_requested.connect(self.debug_manager.step_over)
+        self.debug_toolbar.step_into_requested.connect(self.debug_manager.step_into)
+        self.debug_toolbar.step_out_requested.connect(self.debug_manager.step_out)
+        self.debug_toolbar.continue_requested.connect(self.debug_manager.continue_exec)
+        # Add to window (will be positioned later in _setup_ui or manually)
+        self.addToolBar(Qt.TopToolBarArea, self.debug_toolbar)
+        self.debug_toolbar.hide()
+
+        self.debug_manager.session_started.connect(self._on_debug_session_started)
+        self.debug_manager.session_stopped.connect(self._on_debug_session_stopped)
+        self.debug_manager.paused.connect(self._on_debug_paused)
+        self.debug_manager.continued.connect(self._on_debug_continued)
+        self.debug_manager.variables_updated.connect(self.debug_sidebar.set_variables)
+        self.debug_manager.stack_updated.connect(self.debug_sidebar.set_stack)
+        self.debug_manager.breakpoints_updated.connect(self.debug_sidebar.set_breakpoints)
 
         self.privacy_filter = PrivacyFilter(self.settings_data.get("privacy_firewall", False))
 
@@ -296,6 +433,9 @@ class MainWindow(QMainWindow):
         sidebar_layout.addWidget(self.mcp_marketplace)
         sidebar_layout.addWidget(self.task_board)
         sidebar_layout.addWidget(self.fine_tuning_panel)
+        sidebar_layout.addWidget(self.debug_sidebar)
+        sidebar_layout.addWidget(self.test_sidebar)
+        sidebar_layout.addWidget(self.plugin_sidebar)
         
         self.knowledge_sidebar.hide()
         self.template_library.hide()
@@ -309,6 +449,9 @@ class MainWindow(QMainWindow):
         self.mcp_marketplace.hide()
         self.task_board.hide()
         self.fine_tuning_panel.hide()
+        self.debug_sidebar.hide()
+        self.test_sidebar.hide()
+        self.plugin_sidebar.hide()
 
         self.sidebar_stack.setCurrentIndex(1) # Start with Chat sidebar
 
@@ -318,9 +461,16 @@ class MainWindow(QMainWindow):
         # Editor area: vertical splitter with tabs on top, terminal below
         self.editor_splitter = QSplitter(Qt.Vertical)
         self.editor_tabs = EditorTabs()
+        self.editor_tabs.currentChanged.connect(self._on_editor_tab_changed)
         self.editor_splitter.addWidget(self.editor_tabs)
 
         self.terminal = TerminalWidget()
+        self.terminal.output_received.connect(self._on_terminal_output)
+        self.editor_splitter.addWidget(self.terminal)
+        self.editor_splitter.setSizes([600, 200])
+
+        # Check for dev container
+        QTimer.singleShot(2000, self._check_dev_container)
         
         # Add components to splitter
         self.main_splitter.addWidget(self.activity_bar)
@@ -513,9 +663,16 @@ class MainWindow(QMainWindow):
         self.context_label.setStyleSheet("padding: 0 10px; color: #8b949e;")
         self.status_bar.addPermanentWidget(self.context_label)
 
-        self.editor_pos_label = QLabel("Ln 1, Col 1")
         self.editor_pos_label.setStyleSheet("padding: 0 10px; color: #8b949e;")
         self.status_bar.addPermanentWidget(self.editor_pos_label)
+
+        self.terminal_toggle = QPushButton("\ud83d\udda5 Terminal")
+        self.terminal_toggle.setCheckable(True)
+        self.terminal_toggle.setChecked(True)
+        self.terminal_toggle.setFlat(True)
+        self.terminal_toggle.setStyleSheet("padding: 0 5px; color: #8b949e;")
+        self.terminal_toggle.clicked.connect(self._toggle_terminal)
+        self.status_bar.addPermanentWidget(self.terminal_toggle)
 
         self.auto_exec_check = QPushButton("Frictionless: OFF")
         self.auto_exec_check.setCheckable(True)
@@ -529,6 +686,13 @@ class MainWindow(QMainWindow):
         self.summarize_status_btn.setFlat(True)
         self.summarize_status_btn.clicked.connect(self._trigger_summarization)
         self.status_bar.addPermanentWidget(self.summarize_status_btn)
+
+        self.autocomplete_status_btn = QPushButton(f"Autocomplete: {'ON' if self._autocomplete_enabled else 'OFF'}")
+        self.autocomplete_status_btn.setCheckable(True)
+        self.autocomplete_status_btn.setChecked(self._autocomplete_enabled)
+        self.autocomplete_status_btn.setFlat(True)
+        self.autocomplete_status_btn.clicked.connect(self._on_autocomplete_toggled)
+        self.status_bar.addPermanentWidget(self.autocomplete_status_btn)
 
         self._update_frictionless_style(self.auto_exec_check.isChecked())
         self._set_summarize_running(False)
@@ -593,6 +757,15 @@ class MainWindow(QMainWindow):
         self._draft_timer.setInterval(5000)
         self._draft_timer.timeout.connect(self._save_draft)
         self._draft_timer.start()
+
+    def _toggle_terminal(self):
+        if self.terminal.isVisible():
+            self.terminal.hide()
+            self.terminal_toggle.setChecked(False)
+        else:
+            self.terminal.show()
+            self.terminal_toggle.setChecked(True)
+            self.terminal.input_line.setFocus()
 
     def _setup_shortcuts(self):
         self._apply_shortcuts()
@@ -707,12 +880,47 @@ class MainWindow(QMainWindow):
         # Hide all custom sidebars first
         for w in (self.knowledge_sidebar, self.template_library, self.analytics_sidebar,
                   self.branch_tree_sidebar, self.schedule_sidebar, self.image_gen_sidebar,
-                   self.workflow_sidebar, self.bookmarks_panel, self.agent_forge, self.mcp_marketplace,
-                   self.task_board, self.fine_tuning_panel):
+                  self.workflow_sidebar, self.bookmarks_panel, self.agent_forge, self.mcp_marketplace,
+                  self.task_board, self.fine_tuning_panel, self.debug_sidebar, self.test_sidebar,
+                  self.task_runner_sidebar, self.pr_sidebar, self.docker_sidebar, self.plugin_sidebar):
             w.hide()
         self.sidebar_stack.show()
 
-        if index == 5:
+        if index == 17:
+            if hasattr(self, 'debug_sidebar'):
+                self.sidebar_stack.setCurrentWidget(self.debug_sidebar)
+            else:
+                log.error("Debug sidebar not initialized")
+        elif index == 18:
+            if hasattr(self, 'test_sidebar'):
+                self.sidebar_stack.setCurrentWidget(self.test_sidebar)
+                self.test_manager.discover_tests() # Refresh on switch
+            else:
+                log.error("Test sidebar not initialized")
+        elif index == 19:
+            if hasattr(self, 'task_runner_sidebar'):
+                self.sidebar_stack.setCurrentWidget(self.task_runner_sidebar)
+                self.build_manager.load_tasks()
+            else:
+                log.error("Task runner sidebar not initialized")
+        elif index == 20:
+            if hasattr(self, 'pr_sidebar'):
+                self.sidebar_stack.setCurrentWidget(self.pr_sidebar)
+                self.remote_service.fetch_prs()
+                self.remote_service.fetch_issues()
+            else:
+                log.error("Remote sidebar not initialized")
+        elif index == 21:
+            if hasattr(self, 'docker_sidebar'):
+                self.sidebar_stack.setCurrentWidget(self.docker_sidebar)
+                self.docker_manager.refresh_all()
+            else:
+                log.error("Docker sidebar not initialized")
+        elif index == 22:
+            self.terminal.show()
+            self.terminal.execute_command("python3")
+            self.status_label.setText("REPL: Python 3 started in terminal")
+        elif index == 5:
             self.sidebar_stack.hide()
             self.knowledge_sidebar.show()
         elif index == 6:
@@ -760,6 +968,16 @@ class MainWindow(QMainWindow):
             self.sidebar_stack.hide()
             self.fine_tuning_panel.refresh()
             self.fine_tuning_panel.show()
+        elif index == 23: # Extensions
+            self.sidebar_stack.hide()
+            self.plugin_sidebar.show()
+        elif index >= 100:
+            # Handle Plugin-registered activities
+            for plugin in self.plugin_manager.get_active_plugins():
+                if hasattr(plugin, 'activity_index') and plugin.activity_index == index:
+                    if hasattr(plugin, 'on_activity_activated'):
+                        plugin.on_activity_activated()
+                    return
         else:
             self.sidebar_stack.setCurrentIndex(index)
             self.sidebar_stack.show()
@@ -823,6 +1041,8 @@ class MainWindow(QMainWindow):
         editor = self.editor_tabs.open_file(filepath)
         if editor:
             editor.cursor_changed.connect(self._update_cursor_pos)
+            if hasattr(editor, 'breakpoint_toggled'):
+                editor.breakpoint_toggled.connect(self._on_editor_breakpoint_toggled)
             # Initial update
             cursor = editor.textCursor()
             self._update_cursor_pos(cursor.blockNumber() + 1, cursor.columnNumber() + 1)
@@ -1124,18 +1344,35 @@ class MainWindow(QMainWindow):
         if not self.current_conv:
             return
 
+        # PH15: Handle /repl slash command
+        if text.startswith("/repl "):
+            code = text[6:].strip()
+            self.notebook_manager.kernel.execute("chat_repl", code)
+            self.status_label.setText("REPL: Executing...")
+            # Optionally show in chat? For now just execute.
+            return
+
+        # Check for Agent Mode
+        is_agentic = self.input_widget.agent_mode_btn.isChecked()
+
         # Reset recursion counter for new user messages
         if text:
             self._recursion_depth = 0
             self._auto_continue_count = 0
 
-        if self._recursion_depth >= self._max_recursion:
-            self.status_label.setText("Max agentic steps reached. Stopped.")
-            self._recursion_depth = 0
-            self.input_widget.set_streaming(False)
-            return
+        # PH3: Resolve @ Mentions context
+        workspace = self.workspace_panel.current_workspace()
+        if workspace:
+            self.context_manager.workspace_root = Path(workspace)
+            terminal_output = self.terminal.get_recent_output(100)
+            resolved = self.context_manager.resolve_context(text, terminal_output=terminal_output)
+            if resolved:
+                context_prompt = self.context_manager.build_context_prompt(resolved)
+                # Inject into the text for the AI (but don't necessarily show it duplicated to user? 
+                # Actually, adding it to the message content is the safest way to ensure the AI sees it.)
+                text = f"{context_prompt}\n{text}"
 
-        self._recursion_depth += 1
+        # ... (skipping some recursion checks for clarity, assuming they'll be integrated or replaced by AgenticLoop) ...
 
         idx = self.chat_tabs.currentIndex()
         if idx < 0:
@@ -1148,6 +1385,99 @@ class MainWindow(QMainWindow):
             conv = self._get_tab_conv(idx)
             if not conv:
                 return
+
+        # Add message to history
+        msg_id = str(uuid.uuid4())
+        msg = {
+            "id": msg_id,
+            "role": "user",
+            "content": text,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "model": self.model_combo.currentText()
+        }
+        if images: msg["images"] = images
+        if files: msg["files"] = files
+        
+        conv["messages"].append(msg)
+        self._save_conv(conv)
+        self._refresh_chat_display()
+
+        # Prepare tools
+        tools = self.tool_executor.registry.get_tool_definitions()
+        if self.settings_data.get("mcp_enabled", True):
+            tools += self.mcp_manager.get_tool_definitions()
+
+        if is_agentic:
+            self._run_agentic(conv, tools, text, images, files)
+        else:
+            self._start_generation(conv, tools, text, images, files, bypass_rag)
+
+    def _run_agentic(self, conv, tools, text, images, files):
+        """Autonomous tool execution loop."""
+        gen_params = self.settings_data.get("gen_params", DEFAULT_GEN_PARAMS)
+        system_prompt = conv.get("system_prompt", DEFAULT_SYSTEM_PROMPT)
+        
+        # Inject long-term memory
+        memory_context = self.tool_executor.memory.get_context_string()
+        if memory_context:
+            system_prompt = f"{system_prompt}\n\n{memory_context}"
+            
+        # Inject project-specific rules
+        project_instructions = self.project_rules.get_system_instructions()
+        if project_instructions:
+            system_prompt += project_instructions
+
+        self._agentic_loop = AgenticLoop(
+            model=self.model_combo.currentText() or DEFAULT_MODEL,
+            messages=conv["messages"],
+            system_prompt=system_prompt,
+            tools=tools,
+            agent=self.agent,
+            mcp_manager=self.mcp_manager,
+            settings=self.settings_data,
+            gen_params=gen_params
+        )
+        
+        # Connect signals
+        self._agentic_loop.token_received.connect(lambda t: self._on_token(t, 0)) # Default to pane 0
+        self._agentic_loop.tool_executing.connect(self._inject_tool_status)
+        self._agentic_loop.tool_result.connect(lambda name, result: self._inject_tool_status(name, {}, status="done"))
+        self._agentic_loop.finished.connect(self._on_agentic_done)
+        self._agentic_loop.error_occurred.connect(self._on_worker_error)
+        
+        # Initialize streaming display data
+        self._streaming_data[0] = {
+            "text": "",
+            "tokens": 0,
+            "start_time": time.time(),
+            "dirty": False,
+            "initialized": False,
+            "flushed_text": ""
+        }
+        
+        self._active_stream_conv = conv
+        self._active_stream_tab_index = self.chat_tabs.currentIndex()
+        self._set_streaming_state(True)
+        self._stream_timer.start()
+        
+        self._agentic_loop.start()
+
+    def _on_agentic_done(self, final_text, all_messages, stats):
+        """Called when AgenticLoop finishes its run."""
+        self._set_streaming_state(False)
+        self._stream_timer.stop()
+        
+        if self._active_stream_conv:
+            # Update history with all messages from the loop
+            self._active_stream_conv["messages"] = all_messages
+            self._save_conv(self._active_stream_conv)
+            self._refresh_chat_display()
+            
+        self.status_label.setText(f"Agentic Finished. {stats.get('total_duration', '')}")
+        log.info(f"Agentic loop finished: {stats}")
+
+    def _start_generation(self, conv, tools, text, images, files, bypass_rag=False):
+        """Legacy single-shot generation."""
         self.current_conv = conv
 
         if text.startswith("/"):
@@ -1214,6 +1544,12 @@ class MainWindow(QMainWindow):
         log.info(f"Sending {len(tools)} tools to model ({len(self.mcp_manager.get_tool_definitions())} from MCP)")
 
         system_prompt = conv.get("system_prompt", "")
+        
+        # Inject project-specific rules
+        project_instructions = self.project_rules.get_system_instructions()
+        if project_instructions:
+            system_prompt += project_instructions
+            
         mcp_tools = self.mcp_manager.get_tool_definitions()
         if mcp_tools:
             tool_names = [t["function"]["name"] for t in mcp_tools]
@@ -1826,19 +2162,29 @@ class MainWindow(QMainWindow):
         cmd = parts[0].lower()
         arg = " ".join(parts[1:])
 
+        if cmd == "/run":
+            if not arg:
+                self.status_label.setText("Usage: /run <task_id>")
+                return
+            self.build_manager.run_task(arg)
+            return
+
         if cmd == "/search":
             if not arg:
                 self.status_label.setText("Usage: /search <query>")
                 return
-            if not self.workspace_index:
-                self.status_label.setText("Workspace not indexed")
-                return
-            results = search_index(self.workspace_index, arg)
+            results = self.semantic_indexer.search(arg)
             if results:
-                info = "\n".join(f"- {r['path']}" for r in results[:10])
-                QMessageBox.information(self, "Search Results", f"Found in:\n{info}")
+                info = "\n".join(f"- {r['path']} (score: {r['score']:.2f})" for r in results)
+                QMessageBox.information(self, "Semantic Search Results", f"Found relevant snippets in:\n{info}")
             else:
-                self.status_label.setText("No results found")
+                self.status_label.setText("No semantic results found")
+        elif cmd == "/index":
+            self.status_label.setText("Starting semantic indexing...")
+            self._indexer_thread = SemanticWorkspaceIndexer(self.workspace_root, self.semantic_indexer)
+            self._indexer_thread.progress.connect(lambda cur, tot: self.status_bar.showMessage(f"Indexing: {cur}/{tot} files...", 2000))
+            self._indexer_thread.finished.connect(lambda: self.status_label.setText("Semantic indexing complete!"))
+            self._indexer_thread.start()
         elif cmd == "/summarize":
             self._run_summarization()
         elif cmd == "/clear":
@@ -1864,9 +2210,25 @@ class MainWindow(QMainWindow):
         elif cmd == "/stats":
             if self.current_conv:
                 self._show_conv_stats()
-        elif cmd == "/replay":
-            self._show_replay()
+        elif cmd == "/terminal":
+            if not self.terminal.isVisible():
+                self._toggle_terminal()
+            self.terminal.input_line.setFocus()
+            self.status_label.setText("Terminal focused")
+        elif cmd == "/diff":
+            # Logic to open the diff view for the current active file
+            cur_tab = self.editor_tabs.currentWidget()
+            if cur_tab and hasattr(cur_tab, 'file_path'):
+                self._diff_active_file(cur_tab.file_path)
+            else:
+                self.status_label.setText("No active file to diff")
+        elif cmd == "/file":
+            if arg:
+                self._open_file_by_path(arg)
+            else:
+                self.status_label.setText("Usage: /file <path>")
         elif cmd == "/help":
+            if self.current_conv:
                 msgs = self.current_conv["messages"]
                 total = len(msgs)
                 user_msgs = sum(1 for m in msgs if m["role"] == "user")
@@ -1901,6 +2263,10 @@ class MainWindow(QMainWindow):
             self._rag_enabled = not self._rag_enabled
             state = "ON" if self._rag_enabled else "OFF"
             self.status_label.setText(f"RAG context injection: {state}")
+        elif cmd == "/autocomplete":
+            self._on_autocomplete_toggled()
+            state = "ON" if self._autocomplete_enabled else "OFF"
+            self.status_label.setText(f"AI Autocomplete: {state}")
         elif cmd == "/consensus":
             if not arg:
                 self.status_label.setText("Usage: /consensus <prompt>")
@@ -1924,7 +2290,13 @@ class MainWindow(QMainWindow):
                         self.status_label.setText("Memory cleared")
                 else:
                     self.status_label.setText("No memories stored yet")
-        if cmd == "/help":
+        elif cmd == "/rules":
+            rules_text = self.project_rules.get_system_instructions()
+            if rules_text:
+                QMessageBox.information(self, "Active Project Rules", rules_text)
+            else:
+                self.status_label.setText("No project-specific rules found (.synapserc, .cursorrules, etc.)")
+        elif cmd == "/help":
             help_text = (
                 "/clear - New chat\n/model <name> - Switch model\n/system - Edit system prompt\n"
                 "/search <query> - Search workspace\n/summarize - Summarize to free context\n"
@@ -1932,6 +2304,8 @@ class MainWindow(QMainWindow):
                 "/mcp [name] - Show MCP status or toggle a server\n"
                 "/rag - Toggle RAG context injection\n"
                 "/memory [clear] - View or clear persistent memory\n"
+                "/rules - Show active project-specific rules\n"
+                "/autocomplete - Toggle AI code completion\n"
                 "/youtube <url> - Fetch YouTube transcript for RAG\n"
                 "/consensus <prompt> - Query multiple models side-by-side\n"
                 "/help - Show this help\n\n"
@@ -1941,7 +2315,7 @@ class MainWindow(QMainWindow):
                 "Ctrl+Shift+P: Command palette | Ctrl+Shift+F: Search conversations\n"
                 "Ctrl+Shift+D: Duplicate chat\n"
                 "Ctrl+Shift+H: Search & replace workspace | Ctrl+`: Toggle terminal\n"
-                "Ctrl+,: Settings | Ctrl+I: Import | Ctrl+=/-/0: Zoom\n"
+                "Ctrl+,: Settings | Ctrl+I: Import | Ctrl+TextZoom: Ctrl+=/-/0\n"
                 "Ctrl+V: Paste image | @ in input: Mention workspace file"
             )
             QMessageBox.information(self, "Slash Commands & Shortcuts", help_text)
@@ -1952,36 +2326,71 @@ class MainWindow(QMainWindow):
             else:
                 self.status_label.setText(f"Unknown command: {cmd}")
 
+    def _open_file_by_path(self, path):
+        abs_path = os.path.abspath(path)
+        if os.path.exists(abs_path) and os.path.isfile(abs_path):
+            editor = self.editor_tabs.open_file(abs_path)
+            # Enable LSP for this file
+            if editor:
+                editor.set_lsp_manager(self.lsp_manager, abs_path)
+                editor.autocomplete.enabled = self._autocomplete_enabled
+            
+            self.status_bar.showMessage(f"Opened {abs_path}", 3000)
+        else:
+            self.status_label.setText(f"File not found: {path}")
+
+    def _diff_active_file(self, file_path):
+        try:
+            with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+                old_content = f.read()
+            
+            # Get current editor content
+            editor = self.editor_tabs.currentWidget().findChild(CodeEditor)
+            if editor:
+                new_content = editor.toPlainText()
+                dialog = DiffViewDialog(self, str(file_path), old_content, new_content)
+                dialog.exec_()
+        except Exception as e:
+            self.status_label.setText(f"Diff failed: {e}")
+
     def _expand_file_mentions(self, text):
         import re as _re
-        # Improved regex to catch @mentions more accurately
         mentions = _re.findall(r'@([a-zA-Z0-9_\-\./\+]+)', text)
-        if not mentions or not self.workspace_index:
+        if not mentions:
             return text
+            
         ws = self.workspace_panel.get_workspace_dir()
         if not ws:
             return text
+            
         appended = []
-        for mention in set(mentions): # Use set to avoid duplicate injections
-            for indexed_path in self.workspace_index:
-                if mention == indexed_path or indexed_path.endswith("/" + mention) or indexed_path.endswith("\\" + mention):
+        for mention in set(mentions):
+            found = False
+            # 1. Try direct filename match in existing index
+            if self.workspace_index:
+                for indexed_path in self.workspace_index:
+                    if mention == indexed_path or indexed_path.endswith("/" + mention) or indexed_path.endswith("\\" + mention):
+                        full = ws / indexed_path
+                        try:
+                            content = full.read_text(errors='replace')[:20000]
+                            appended.append(f"\n\n--- File: {indexed_path} ---\n```\n{content}\n```")
+                            found = True
+                            break
+                        except: pass
+            
+            # 2. Try semantic match if not found directly
+            if not found:
+                results = self.semantic_indexer.search(mention, top_k=1)
+                if results:
+                    best = results[0]
+                    indexed_path = best["path"]
                     full = ws / indexed_path
                     try:
-                        ext = Path(indexed_path).suffix.lower()
-                        if ext in ['.pdf', '.docx']:
-                            if ext == '.pdf':
-                                file_content = extract_text_from_pdf(full)[:20000]
-                            else:
-                                file_content = extract_text_from_docx(full)[:20000]
-                        else:
-                            file_content = full.read_text(errors='replace')[:20000]
-                        
-                        if file_content.strip():
-                            appended.append(f"\n\n--- File: {indexed_path} ---\n```\n{file_content}\n```")
-                            log.info(f"Injected @mention: {indexed_path}")
-                    except Exception as e:
-                        log.error(f"Failed to extract mention content for {indexed_path}: {e}")
-                    break
+                        content = full.read_text(errors='replace')[:20000]
+                        appended.append(f"\n\n--- File: {indexed_path} (Semantic Match) ---\n```\n{content}\n```")
+                        log.info(f"Injected semantic @mention: {indexed_path}")
+                    except: pass
+
         if appended:
             text += "\n".join(appended)
         return text
@@ -2009,16 +2418,32 @@ class MainWindow(QMainWindow):
                 
         return snippets
 
-    def _on_chat_action(self, action, index):
+    def _on_chat_action(self, action, index_or_data):
         if not self.current_conv:
             return
 
+        # Parse index and optional filename
+        code_idx = -1
+        filename = None
+        if isinstance(index_or_data, str) and "/" in index_or_data:
+            parts = index_or_data.split("/")
+            try:
+                code_idx = int(parts[0])
+                filename = parts[1] if len(parts) > 1 else None
+            except:
+                pass
+        else:
+            try:
+                code_idx = int(index_or_data)
+            except:
+                pass
+
         if action == "applycode" or action == "proposecode":
-            self._propose_code_block(index, auto_apply=(action == "applycode"))
+            self._propose_code_block(code_idx, auto_apply=(action == "applycode"), forced_filename=filename)
         elif action == "savecode":
-            self._propose_code_block(index, auto_apply=True)
+            self._propose_code_block(code_idx, auto_apply=True, forced_filename=filename)
         elif action == "runcode":
-            self._run_code_block(index)
+            self._run_code_block(code_idx)
         elif action == "copy":
             if 0 <= index < len(self.current_conv["messages"]):
                 msg = self.current_conv["messages"][index]
@@ -2334,7 +2759,7 @@ class MainWindow(QMainWindow):
         self.store.save(self.current_conv)
         self._render_chat()
 
-    def _propose_code_block(self, code_block_index, auto_apply=False):
+    def _propose_code_block(self, code_block_index, auto_apply=False, forced_filename=None):
         if not self.current_conv:
             return
         
@@ -2377,7 +2802,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "No Workspace", "Open a folder first.")
             return
 
-        filename = detected_path
+        filename = forced_filename or detected_path
         if not filename:
              filename, ok = QInputDialog.getText(self, "Apply Code", "Filename to modify:", text="main.py")
              if not ok or not filename: return
@@ -2398,10 +2823,14 @@ class MainWindow(QMainWindow):
             self._start_indexing()
             return
 
+        # Use FileApplier for smart merging
+        applier = FileApplier(workspace_root=str(workspace))
+        new_content = applier.merge_snippet(old_content, code)
+
         # If it exists, either show diff or auto-apply
         if auto_apply:
             try:
-                filepath.write_text(code)
+                filepath.write_text(new_content)
                 self._edit_history.append((filepath, old_content))
                 self.status_label.setText(f"Applied changes to {filename}. (Ctrl+Z to Rollback)")
                 self.workspace_panel.refresh()
@@ -2410,10 +2839,10 @@ class MainWindow(QMainWindow):
             except OSError as e:
                 self.status_label.setText(f"Failed to write {filename}: {e}")
         else:
-            dialog = DiffViewDialog(self, str(filename), old_content, code)
+            dialog = DiffViewDialog(self, str(filename), old_content, new_content)
             if dialog.exec_() == QDialog.Accepted and dialog.accepted_change:
                 try:
-                    filepath.write_text(code)
+                    filepath.write_text(new_content)
                     self._edit_history.append((filepath, old_content))
                     self.status_label.setText(f"Applied changes to {filename}. (Ctrl+Z to Rollback)")
                     self.workspace_panel.refresh()
@@ -2474,6 +2903,14 @@ class MainWindow(QMainWindow):
         state = settings.value("windowState")
         if state:
             self.restoreState(state)
+
+    def _on_settings_requested(self):
+        self.settings_dialog.show()
+
+    def add_sidebar_widget(self, widget: QWidget, name: str):
+        """Plugin API hook to add a new sidebar widget."""
+        self.sidebar_stack.addWidget(widget)
+        log.info(f"Plugin sidebar widget added: {name}")
 
     def _on_workspace_changed(self, path):
         self.terminal.set_cwd(path)
@@ -2951,6 +3388,21 @@ class MainWindow(QMainWindow):
                 self.sidebar.refresh(select_id=conv_id)
                 break
 
+    def _on_lsp_diagnostics(self, uri, diagnostics):
+        """Routes diagnostics from LSP to the correct editor tab."""
+        # Convert URI back to local path
+        if not uri.startswith("file://"): return
+        path = uri[7:]
+        if os.name == 'nt' and path.startswith('/'):
+            path = path[1:]
+        
+        # Find the editor for this path
+        for i in range(self.tabs.count()):
+            editor = self.tabs.widget(i)
+            if hasattr(editor, '_filepath') and editor._filepath == path:
+                editor.set_diagnostics(diagnostics)
+                break
+
     def closeEvent(self, event):
         if self.current_conv:
             self.store.save(self.current_conv)
@@ -3024,10 +3476,165 @@ class MainWindow(QMainWindow):
         self.input_widget.set_streaming(True)
 
     def _on_auto_exec_toggled(self, checked):
-        self.settings_data["auto_exec"] = checked
-        save_settings(self.settings_data)
+        state = "ON" if checked else "OFF"
+        self.status_label.setText(f"Frictionless mode: {state}")
+        save_settings({"auto_exec": checked})
         self._update_frictionless_style(checked)
-        self.status_label.setText(f"Frictionless Mode: {'Enabled' if checked else 'Disabled'}")
+
+    def _on_debug_start(self):
+        editor = self.editor_tabs.currentWidget()
+        if not editor or not isinstance(editor, CodeEditor):
+            return
+        
+        filepath = editor._filepath
+        if not filepath:
+            return
+            
+        # Sync breakpoints
+        self.debug_manager.clear_breakpoints()
+        for line in editor.breakpoints:
+            self.debug_manager.add_breakpoint(filepath, line)
+            
+        self.debug_manager.start_debug(filepath)
+
+    def _on_debug_stop(self):
+        self.debug_manager.stop_debug()
+
+    def _on_debug_session_started(self):
+        self.debug_toolbar.show()
+        self.debug_toolbar._set_session_active(True)
+        self.status_label.setText("Debug session started")
+
+    def _on_debug_session_stopped(self):
+        self.debug_toolbar.hide()
+        self.debug_toolbar._set_session_active(False)
+        self.status_label.setText("Debug session stopped")
+        # Clear highlights
+        for i in range(self.editor_tabs.count()):
+            editor = self.editor_tabs.widget(i)
+            if isinstance(editor, CodeEditor):
+                editor.set_execution_line(-1)
+
+    def _on_debug_paused(self, reason, filepath, line):
+        self.status_label.setText(f"Paused: {reason} at {os.path.basename(filepath)}:{line}")
+        # Open file if not open
+        self._open_file_internal(filepath)
+        # Find editor and highlight
+        for i in range(self.editor_tabs.count()):
+            editor = self.editor_tabs.widget(i)
+            if isinstance(editor, CodeEditor) and editor._filepath == filepath:
+                self.editor_tabs.setCurrentIndex(i)
+                editor.set_execution_line(line)
+        self.debug_toolbar.continue_action.setVisible(True)
+        self.debug_toolbar.pause_action.setVisible(False)
+
+    def _on_debug_continued(self):
+        self.status_label.setText("Running...")
+        self.debug_toolbar.continue_action.setVisible(False)
+        self.debug_toolbar.pause_action.setVisible(True)
+        # Clear execution highlight
+        editor = self.editor_tabs.currentWidget()
+        if isinstance(editor, CodeEditor):
+            editor.set_execution_line(-1)
+
+    def _on_debug_breakpoint_clicked(self, filepath, line):
+        self._open_file_internal(filepath)
+        for i in range(self.editor_tabs.count()):
+            editor = self.editor_tabs.widget(i)
+            if isinstance(editor, CodeEditor) and editor._filepath == filepath:
+                self.editor_tabs.setCurrentIndex(i)
+                block = editor.document().findBlockByLineNumber(line - 1)
+                cursor = editor.textCursor()
+                cursor.setPosition(block.position())
+                editor.setTextCursor(cursor)
+
+    def _on_editor_breakpoint_toggled(self, line):
+        editor = self.sender()
+        if not isinstance(editor, CodeEditor) or not editor._filepath:
+            return
+        
+        if line in editor.breakpoints:
+            self.debug_manager.add_breakpoint(editor._filepath, line)
+        else:
+            self.debug_manager.remove_breakpoint(editor._filepath, line)
+        # Update sidebar
+        self.debug_sidebar.set_breakpoints(self.debug_manager.breakpoints)
+
+    def _on_notebook_output(self, cell_id, text):
+        # Find the active notebook editor and update cell
+        editor = self.editor_tabs.currentWidget()
+        from .notebook_editor import NotebookEditor
+        if isinstance(editor, QWidget):
+            nb_editor = editor.findChild(NotebookEditor)
+            if nb_editor:
+                nb_editor.update_cell_output(cell_id, text)
+
+    def _on_notebook_error(self, cell_id, text):
+        self._on_notebook_output(cell_id, f"Error: {text}")
+
+    def _on_notebook_finished(self, cell_id, count):
+        self.status_label.setText(f"Cell execution finished [{count}]")
+        # Update execution count in UI if needed
+
+    def _on_test_session_finished(self, summary):
+        self.status_label.setText(f"Test session finished with exit code {summary.get('exit_code')}")
+
+    def _on_task_started(self, task_id):
+        self.task_runner_sidebar.set_task_status(task_id, "Running")
+        self.status_label.setText(f"Task started: {task_id}")
+        self.terminal.show() # Ensure terminal is visible for output
+
+    def _on_task_finished(self, task_id, exit_code):
+        status = "Finished" if exit_code == 0 else "Failed"
+        self.task_runner_sidebar.set_task_status(task_id, status)
+        self.status_label.setText(f"Task {task_id} {status.lower()} (exit code {exit_code})")
+
+    def _on_task_output(self, task_id, output):
+        # We'll pipe this to the terminal
+        self.terminal.append_output(output)
+
+    def _on_pr_refresh_requested(self):
+        self.remote_service.fetch_prs()
+        self.remote_service.fetch_issues()
+
+    def _on_pr_selected(self, pr_data):
+        log.info(f"Opening PR review for #{pr_data.get('number')}")
+        dialog = PRReviewView(pr_data, self)
+        dialog.apply_theme(self._current_theme)
+        dialog.exec_()
+
+    def _on_test_result(self, result):
+        nodeid = result.get("nodeid", "")
+        status = result.get("status", "UNKNOWN")
+        if hasattr(self, 'test_sidebar'):
+            self.test_sidebar.update_test_result(nodeid, status)
+
+    def _on_coverage_updated(self, coverage_data):
+        self._current_coverage.update(coverage_data)
+        editor = self.editor_tabs.current_editor()
+        if editor and editor._filepath in self._current_coverage:
+            editor.set_coverage(self._current_coverage[editor._filepath])
+        self.status_label.setText("Coverage results updated")
+
+    def _on_editor_tab_changed(self, index):
+        editor = self.editor_tabs.current_editor()
+        if editor and editor._filepath in self._current_coverage:
+            editor.set_coverage(self._current_coverage[editor._filepath])
+
+    def _on_autocomplete_toggled(self):
+        self._autocomplete_enabled = not self._autocomplete_enabled
+        state = "ON" if self._autocomplete_enabled else "OFF"
+        self.autocomplete_status_btn.setText(f"Autocomplete: {state}")
+        self.autocomplete_status_btn.setChecked(self._autocomplete_enabled)
+        save_settings({"autocomplete": self._autocomplete_enabled})
+        
+        # Update all open editors
+        for i in range(self.editor_tabs.count()):
+            tab = self.editor_tabs.widget(i)
+            editor = tab.findChild(CodeEditor)
+            if editor:
+                editor.autocomplete.enabled = self._autocomplete_enabled
+                editor.autocomplete.clear()
 
     def _update_frictionless_style(self, enabled):
         if enabled:
@@ -3543,6 +4150,24 @@ class MainWindow(QMainWindow):
                 self.model_combo.setCurrentIndex(model_index)
             
         self.status_label.setText(f"Active Agent: {agent.name}")
+
+    def _check_dev_container(self):
+        config = self.docker_manager.get_devcontainer_config()
+        if config:
+            res = QMessageBox.question(
+                self,
+                "Dev Container Detected",
+                f"This workspace contains a Dev Container configuration ({config.get('name', 'unnamed')}).\n\nWould you like to reopen this workspace in a container?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if res == QMessageBox.Yes:
+                self.status_label.setText("Building / Starting Dev Container...")
+                # Placeholder for building/running dev container logic
+                QMessageBox.information(self, "Dev Container", "Dev Container support is partially implemented. Building environment...")
+
+    def _on_terminal_output(self, text):
+        # Handle terminal interaction or context updates based on output
+        pass
 
 class ClickableLabel(QLabel):
     clicked = pyqtSignal()

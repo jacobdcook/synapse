@@ -1,5 +1,7 @@
 import os
 import subprocess
+import platform
+import shlex
 import json
 import logging
 from pathlib import Path
@@ -231,13 +233,19 @@ class ToolExecutor(QObject):
             return f"Error writing file {path}: {e}"
 
     def _run_command(self, command):
-        import shlex
         try:
-            args = shlex.split(command)
+            # Use platform-aware shlex splitting
+            use_posix = (os.name == 'posix')
+            args = shlex.split(command, posix=use_posix)
+            
+            # On Windows, some commands need shell=True to find builtins
+            is_windows = (os.name == 'nt')
+            
             result = subprocess.run(
                 args, capture_output=True, text=True,
                 cwd=str(self.workspace_dir) if self.workspace_dir else None,
-                timeout=60
+                timeout=60,
+                shell=is_windows
             )
             output = result.stdout
             if result.stderr:

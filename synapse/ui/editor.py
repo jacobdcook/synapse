@@ -1,13 +1,16 @@
 import re
+import os
+from typing import List, Dict, Any, Optional
 from PyQt5.QtWidgets import (
     QPlainTextEdit, QWidget, QTextEdit, QHBoxLayout,
     QLineEdit, QPushButton, QLabel, QCheckBox, QShortcut
 )
-from PyQt5.QtCore import QSize, Qt, pyqtSignal, QRegularExpression
+from PyQt5.QtCore import QSize, Qt, pyqtSignal, QRegularExpression, QTimer, QPoint
 from PyQt5.QtGui import (
     QColor, QTextCharFormat, QFont, QSyntaxHighlighter,
-    QPainter, QKeySequence
+    QPainter, QKeySequence, QTextCursor, QFontMetrics, QPolygon
 )
+from ..core.completion_provider import CompletionWorker
 
 
 LANG_RULES = {
@@ -99,6 +102,10 @@ class LineNumberArea(QWidget):
 
     def paintEvent(self, event):
         self.editor.line_number_paint(event)
+
+    def mousePressEvent(self, event):
+        line = self.editor.cursorForPosition(event.pos()).blockNumber() + 1
+        self.editor.toggle_breakpoint(line)
 
 
 class FindReplaceBar(QWidget):
@@ -227,27 +234,180 @@ class FindReplaceBar(QWidget):
             self.count_label.setText("All replaced")
 
 
+class AutocompleteManager(QWidget):
+    """Coordinates ghost text completions for CodeEditor."""
+    def __init__(self, editor):
+        super().__init__(editor)
+        self.editor = editor
+        self.ghost_text = ""
+        self.worker: Optional[CompletionWorker] = None
+        self.timer = QTimer(self)
+        self.timer.setSingleShot(True)
+        self.timer.timeout.connect(self._request_completion)
+        self.enabled = True
+
+    def trigger(self):
+        if not self.enabled: return
+        self.ghost_text = ""
+        self.timer.start(350) # Debounce 350ms
+
+    def _request_completion(self):
+        if self.worker:
+            self.worker.terminate()
+            self.worker = None
+
+        cursor = self.editor.textCursor()
+        doc = self.editor.toPlainText()
+        pos = cursor.position()
+        
+        prefix = doc[:pos]
+        suffix = doc[pos:]
+        
+        # Limit context to avoid heavy requests
+        prefix = prefix[-2000:]
+        suffix = suffix[:1000]
+
+        model = "qwen2.5-coder:1.5b" # Default completion model
+        self.worker = CompletionWorker(prefix, suffix, model=model)
+        self.worker.finished.connect(self._on_finished)
+        self.worker.start()
+
+    def _on_finished(self, text):
+        if text:
+            self.ghost_text = text
+            self.editor.viewport().update()
+        self.worker = None
+
+    def accept(self):
+        if self.ghost_text:
+            cursor = self.editor.textCursor()
+            cursor.insertText(self.ghost_text)
+            self.ghost_text = ""
+            self.editor.viewport().update()
+            return True
+        return False
+
+    def clear(self):
+        if self.ghost_text:
+            self.ghost_text = ""
+            self.editor.viewport().update()
+            return True
+        return False
+
+    def paint_ghost_text(self, painter):
+        if not self.ghost_text: return
+        
+        cursor = self.editor.textCursor()
+        rect = self.editor.cursorRect(cursor)
+        
+        # Calculate exactly where to start painting
+        # We need to account for scrolls
+        x = rect.left()
+        y = rect.top()
+        
+        painter.save()
+        painter.setPen(QColor("#8b949e")) # Faint gray
+        painter.setFont(self.editor.font())
+        
+        # Draw line by line if multi-line
+        lines = self.ghost_text.split('\n')
+        fh = self.editor.fontMetrics().height()
+        for i, line in enumerate(lines):
+            painter.drawText(x if i == 0 else self.editor.viewportMargins().left(), 
+                             y + (i * fh), 
+                             self.editor.viewport().width(), 
+                             fh, 
+                             Qt.AlignLeft, 
+                             line)
+        painter.restore()
+
+
 class CodeEditor(QPlainTextEdit):
     cursor_changed = pyqtSignal(int, int)
     content_modified = pyqtSignal()
+    request_lsp_hover = pyqtSignal(int, int) # line, column
+    breakpoint_toggled = pyqtSignal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.autocomplete = AutocompleteManager(self)
         self.line_area = LineNumberArea(self)
-        self._highlighter = None
+        self._highlighter: Optional[SyntaxHighlighter] = None
         self._original_text = ""
-
-        font = QFont("JetBrains Mono", 12)
-        font.setStyleHint(QFont.Monospace)
-        self.setFont(font)
-        self.setTabStopDistance(self.fontMetrics().horizontalAdvance(' ') * 4)
-
+        self._lsp_manager: Optional[Any] = None # Avoid circular import
+        self._filepath: Optional[str] = None
+        self._lang: Optional[str] = None
+        self._diagnostics: List[Dict[str, Any]] = []
+        
         self.blockCountChanged.connect(self._update_line_width)
         self.updateRequest.connect(self._update_line_area)
         self.cursorPositionChanged.connect(self._on_cursor_position_changed)
         self.cursorPositionChanged.connect(self._highlight_current_line)
         self.textChanged.connect(self._on_text_changed)
+
+        self.breakpoints = set()
+        self.execution_line = -1
+        self.coverage_data = {} # {line_no: status}
         self._update_line_width()
+
+    def set_lsp_manager(self, manager, filepath):
+        self._lsp_manager = manager
+        self._filepath = filepath
+        self._lang = self._get_lang_from_ext(filepath)
+        if self._lsp_manager and self._lang:
+            self._lsp_manager.did_open(self._filepath, self._lang, self.toPlainText())
+
+    def _get_lang_from_ext(self, filename):
+        ext = os.path.splitext(filename)[1].lower()
+        return EXT_TO_LANG.get(ext)
+
+    def set_diagnostics(self, diagnostics):
+        """Sets and renders LSP diagnostics (squiggles)."""
+        self._diagnostics = diagnostics
+        self._render_diagnostics()
+
+    def _render_diagnostics(self):
+        extra_selections = []
+        
+        # Current line highlight still needed
+        if not self.isReadOnly():
+            sel = QTextEdit.ExtraSelection()
+            hl_color = getattr(self, '_current_line_bg', QColor("#2a2d2e"))
+            sel.format.setBackground(hl_color)
+            sel.format.setProperty(QTextCharFormat.FullWidthSelection, True)
+            sel.cursor = self.textCursor()
+            sel.cursor.clearSelection()
+            extra_selections.append(sel)
+
+        for diag in self._diagnostics:
+            range_info = diag.get("range", {})
+            start = range_info.get("start", {})
+            end = range_info.get("end", {})
+            
+            cursor = self.textCursor()
+            cursor.clearSelection()
+            
+            # Convert LSP line/char (0-indexed) to QTextCursor position
+            # This is a bit expensive but necessary for squiggles
+            pos_start = self.document().findBlockByLineNumber(start.get("line", 0)).position() + start.get("character", 0)
+            pos_end = self.document().findBlockByLineNumber(end.get("line", 0)).position() + end.get("character", 0)
+            
+            cursor.setPosition(pos_start)
+            cursor.setPosition(pos_end, QTextCursor.KeepAnchor)
+            
+            sel = QTextEdit.ExtraSelection()
+            sel.cursor = cursor
+            
+            severity = diag.get("severity", 1) # 1=Error, 2=Warning
+            color = QColor("#f44336") if severity == 1 else QColor("#ff9800")
+            
+            fmt = QTextCharFormat()
+            fmt.setUnderlineColor(color)
+            fmt.setUnderlineStyle(QTextCharFormat.WaveUnderline)
+            sel.format = fmt
+            extra_selections.append(sel)
+            
+        self.setExtraSelections(extra_selections)
 
     def set_language(self, lang):
         if self._highlighter:
@@ -270,10 +430,40 @@ class CodeEditor(QPlainTextEdit):
     def _on_text_changed(self):
         if self.is_modified():
             self.content_modified.emit()
+            if self._lsp_manager:
+                self._lsp_timer.start(500) # Debounce 500ms
+            self.autocomplete.trigger()
+
+    def _sync_lsp(self):
+        if self._lsp_manager and self._filepath and self._lang:
+            self._lsp_manager.did_change(self._filepath, self._lang, self.toPlainText())
 
     def _on_cursor_position_changed(self):
+        self._highlight_current_line()
         cursor = self.textCursor()
         self.cursor_changed.emit(cursor.blockNumber() + 1, cursor.columnNumber() + 1)
+
+    def toggle_breakpoint(self, line):
+        if line in self.breakpoints:
+            self.breakpoints.remove(line)
+        else:
+            self.breakpoints.add(line)
+        self.breakpoint_toggled.emit(line)
+        self.line_area.update()
+
+    def set_coverage(self, coverage_data):
+        self.coverage_data = coverage_data
+        self.line_area.update()
+
+    def set_execution_line(self, line):
+        self.execution_line = line
+        self.line_area.update()
+        if line > 0:
+            block = self.document().findBlockByLineNumber(line - 1)
+            cursor = self.textCursor()
+            cursor.setPosition(block.position())
+            self.setTextCursor(cursor)
+        self._highlight_current_line()
 
     def line_number_width(self):
         digits = max(1, len(str(self.blockCount())))
@@ -290,6 +480,12 @@ class CodeEditor(QPlainTextEdit):
         if rect.contains(self.viewport().rect()):
             self._update_line_width()
 
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QPainter(self.viewport())
+        self.autocomplete.paint_ghost_text(painter)
+        painter.end()
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         cr = self.contentsRect()
@@ -297,8 +493,13 @@ class CodeEditor(QPlainTextEdit):
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Tab:
+            if self.autocomplete.accept():
+                return
             self.textCursor().insertText("    ")
             return
+        if event.key() == Qt.Key_Escape:
+            if self.autocomplete.clear():
+                return
         if event.key() == Qt.Key_Backtab:
             cursor = self.textCursor()
             cursor.movePosition(cursor.StartOfBlock, cursor.KeepAnchor)
@@ -343,6 +544,31 @@ class CodeEditor(QPlainTextEdit):
         while block.isValid() and top <= event.rect().bottom():
             if block.isVisible() and bottom >= event.rect().top():
                 number = str(block_number + 1)
+                line_num = block_number + 1
+                
+                # Draw Breakpoint
+                if line_num in self.breakpoints:
+                    painter.setBrush(QColor("#f44336"))
+                    painter.setPen(Qt.NoPen)
+                    painter.drawEllipse(5, top + 2, 12, 12)
+                
+                # Draw Execution Highlight (Yellow Arrow)
+                if line_num == self.execution_line:
+                    painter.setBrush(QColor("#e5c07b"))
+                    painter.setPen(Qt.NoPen)
+                    points = [
+                        QPoint(2, top + 2),
+                        QPoint(10, top + 8),
+                        QPoint(2, top + 14)
+                    ]
+                    painter.drawPolygon(QPolygon(points))
+                
+                # Draw Coverage
+                if line_num in self.coverage_data:
+                    status = self.coverage_data[line_num]
+                    color = QColor("#3fb950") if status == "covered" else QColor("#f85149")
+                    painter.fillRect(self.line_area.width() - 4, top, 4, self.fontMetrics().height(), color)
+
                 painter.setPen(fg_color if block_number == current_block else dim_color)
                 painter.drawText(0, top, self.line_area.width() - 4,
                                  self.fontMetrics().height(), Qt.AlignRight, number)
@@ -353,13 +579,26 @@ class CodeEditor(QPlainTextEdit):
         painter.end()
 
     def _highlight_current_line(self):
-        selections = []
+        extra_selections = []
         if not self.isReadOnly():
+            # Current editing line
             sel = QTextEdit.ExtraSelection()
             hl_color = getattr(self, '_current_line_bg', QColor("#2a2d2e"))
             sel.format.setBackground(hl_color)
             sel.format.setProperty(QTextCharFormat.FullWidthSelection, True)
             sel.cursor = self.textCursor()
             sel.cursor.clearSelection()
-            selections.append(sel)
-        self.setExtraSelections(selections)
+            extra_selections.append(sel)
+            
+        if self.execution_line > 0:
+            # Execution line highlight
+            sel = QTextEdit.ExtraSelection()
+            sel.format.setBackground(QColor("#3e3e10")) # Dark yellow/brown
+            sel.format.setProperty(QTextCharFormat.FullWidthSelection, True)
+            block = self.document().findBlockByLineNumber(self.execution_line - 1)
+            cursor = self.textCursor()
+            cursor.setPosition(block.position())
+            sel.cursor = cursor
+            extra_selections.append(sel)
+            
+        self.setExtraSelections(extra_selections)

@@ -1,4 +1,4 @@
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QPushButton
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QPushButton, QSizePolicy
 from PyQt5.QtCore import Qt, pyqtSignal
 
 
@@ -34,8 +34,15 @@ class ActivityBar(QWidget):
         self._add_action("\U0001f6d2", 14, "Marketplace") # Shopping cart
         self._add_action("\U0001f5d2", 15, "Delegative Board") # Spiral notepad
         self._add_action("\U0001f3af", 16, "Fine-tuning Studio") # Bullseye
+        self._add_action("\U0001f41e", 17, "Debugger") # Ladybug (Debug)
+        self._add_action("\u2697", 18, "Testing") # Beaker icon (Testing)
+        self._add_action("\u2692", 19, "Tasks") # Hammer and pick (Tasks)
+        self._add_action("\u2328", 22, "REPL") # Keyboard icon (REPL)
+        self._add_action("\ud83e\udde9", 23, "Extensions") # Puzzle piece
 
-        layout.addStretch()
+        self.spacer = QWidget()
+        self.spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        layout.addWidget(self.spacer)
 
         settings_btn = QPushButton("\u2699")
         settings_btn.setFixedSize(48, 48)
@@ -46,6 +53,18 @@ class ActivityBar(QWidget):
         )
         settings_btn.clicked.connect(self.settings_requested.emit)
         layout.addWidget(settings_btn)
+
+    def add_activity(self, icon, index, tooltip):
+        """Public API for adding new activities dynamically (e.g., from plugins)."""
+        # Insert before the spacer
+        count = self.layout().count()
+        btn = self._add_action(icon, index, tooltip)
+        # Move it to the position before spacer (count - 2)
+        # Actually _add_action adds to the end, which is after settings_btn.
+        # We need to insert it correctly.
+        self.layout().removeWidget(btn)
+        self.layout().insertWidget(count - 2, btn)
+        return btn
 
     def _add_action(self, icon, index, tooltip):
         btn = QPushButton(icon)
@@ -60,6 +79,7 @@ class ActivityBar(QWidget):
         btn.clicked.connect(lambda: self._on_btn_clicked(index))
         self.layout().addWidget(btn)
         self.buttons.append(btn)
+        return btn
 
         if index == 1:
             btn.setChecked(True)

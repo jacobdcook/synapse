@@ -60,9 +60,13 @@ class ChatRenderer:
 
         def _code_block_replace(match):
             lang = ""
-            lang_match = re.search(r'class="[^"]*language-(\w+)', match.group(0))
+            filename = ""
+            # Detect language and filename from class: class="language-python:main.py"
+            lang_match = re.search(r'class="[^"]*language-([^ ":\n]+)(?::([^ "> \n]+))?', match.group(0))
             if lang_match:
                 lang = lang_match.group(1)
+                filename = lang_match.group(2) if lang_match.group(2) else ""
+
             code_content = match.group(0)
 
             ci = self._code_idx
@@ -83,6 +87,8 @@ class ChatRenderer:
                     )
 
             lang_label = html_module.escape(lang) if lang else "text"
+            if filename:
+                lang_label += f": {html_module.escape(filename)}"
 
             lang_lower = lang.lower()
             preview_btn = ""
@@ -94,11 +100,13 @@ class ChatRenderer:
             if lang_lower in ('python', 'python3', 'py'):
                 run_btn = f'<button class="cb-btn cb-run" onclick="window.location.href=\'action://runcode/{ci}\'">&#9654; Run</button>'
 
+            # Include filename in apply/save actions if present
+            fn_param = f"/{html_module.escape(filename)}" if filename else ""
             btns = (
                 f'<button class="cb-btn" onclick="copyCode(this)">Copy</button>'
-                f'<button class="cb-btn" onclick="window.location.href=\'action://applycode/{ci}\'">Apply</button>'
-                f'<button class="cb-btn" onclick="window.location.href=\'action://proposecode/{ci}\'">Propose</button>'
-                f'<button class="cb-btn" onclick="window.location.href=\'action://savecode/{ci}\'">Save</button>'
+                f'<button class="cb-btn" onclick="window.location.href=\'action://applycode/{ci}{fn_param}\'">Apply</button>'
+                f'<button class="cb-btn" onclick="window.location.href=\'action://proposecode/{ci}{fn_param}\'">Propose</button>'
+                f'<button class="cb-btn" onclick="window.location.href=\'action://savecode/{ci}{fn_param}\'">Save</button>'
                 f'{preview_btn}'
                 f'{run_btn}'
             )

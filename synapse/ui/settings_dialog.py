@@ -4,7 +4,7 @@ from PyQt5.QtWidgets import (
     QPushButton, QLabel, QSlider, QSpinBox, QLineEdit,
     QComboBox, QCheckBox, QGroupBox, QFormLayout, QListWidget,
     QListWidgetItem, QMessageBox, QTableWidget, QTableWidgetItem,
-    QKeySequenceEdit, QHeaderView, QProgressBar
+    QKeySequenceEdit, QHeaderView, QProgressBar, QScrollArea, QFrame
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from ..utils.constants import (
@@ -38,6 +38,8 @@ class SettingsDialog(QDialog):
         self.tabs.addTab(self._build_voice_tab(), "Voice")
         self.tabs.addTab(self._build_shortcuts_tab(), "Shortcuts")
         self.tabs.addTab(self._build_local_backends_tab(), "Local Backends")
+        if self.parent() and hasattr(self.parent(), 'plugin_manager'):
+            self.tabs.addTab(self._build_extensions_tab(), "Extensions")
         layout.addWidget(self.tabs)
 
         btn_row = QHBoxLayout()
@@ -604,6 +606,38 @@ class SettingsDialog(QDialog):
         layout.addWidget(manage_btn)
         
         layout.addStretch()
+        return w
+
+    def _build_extensions_tab(self):
+        w = QWidget()
+        layout = QVBoxLayout(w)
+        
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        
+        container = QWidget()
+        container_layout = QVBoxLayout(container)
+        
+        main_win = self.parent()
+        active_plugins = main_win.plugin_manager.get_active_plugins()
+        
+        if not active_plugins:
+            container_layout.addWidget(QLabel("No active plugins with settings."))
+        else:
+            for plugin in active_plugins:
+                if hasattr(plugin, 'get_settings_widget'):
+                    group = QGroupBox(plugin.name)
+                    g_layout = QVBoxLayout(group)
+                    widget = plugin.get_settings_widget()
+                    if widget:
+                        g_layout.addWidget(widget)
+                        container_layout.addWidget(group)
+        
+        container_layout.addStretch()
+        scroll.setWidget(container)
+        layout.addWidget(scroll)
+        
         return w
 
     def _open_whisper_manager(self):
