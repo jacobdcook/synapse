@@ -25,7 +25,8 @@ class TaskRunnerSidebar(QWidget):
 
         # Header/Toolbar
         toolbar = QToolBar()
-        toolbar.setIconSize(self.style().standardIcon(QStyle.SP_ArrowRight).actualSize(Qt.ToolButtonIconOnly))
+        from PyQt5.QtCore import QSize
+        toolbar.setIconSize(QSize(20, 20))
         
         refresh_action = QAction("🔄", self)
         refresh_action.setToolTip("Refresh Tasks")

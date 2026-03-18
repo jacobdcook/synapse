@@ -180,6 +180,7 @@ class MainWindow(QMainWindow):
         self.voice_manager.error_occurred.connect(lambda msg: self.status_label.setText(msg))
         self.agent_manager = AgentManager()
         self.mcp_manager = MCPClientManager()
+        self.workspace_root = self.settings_data.get("workspace_dir")
         self.context_manager = ContextManager(self.workspace_root)
         self.lsp_manager = LSPManager(self.workspace_root)
         self.lsp_manager.diagnostics_received.connect(self._on_lsp_diagnostics)
@@ -191,21 +192,10 @@ class MainWindow(QMainWindow):
         self.remote_service = GitRemoteService(self.workspace_root)
         self.docker_manager = DockerManager(self.workspace_root)
         self.notebook_manager = NotebookManager(self.workspace_root)
-        self.editor_tabs.notebook_manager = self.notebook_manager
-        
-        # PH16: Plugin System
+        self.tool_executor = ToolExecutor(self.workspace_root)
         self.plugin_api = PluginAPI(self)
         self.plugin_manager = PluginManager(self.plugin_api)
         self.plugin_sidebar = PluginSidebar(self.plugin_manager)
-        self.sidebar_stack.addWidget(self.plugin_sidebar)
-        QTimer.singleShot(5000, self.plugin_manager.discover_plugins) # Delay to let UI stabilize
-
-        # Connect notebook kernel signals
-        self.notebook_manager.kernel.output_received.connect(self._on_notebook_output)
-        self.notebook_manager.kernel.error_received.connect(self._on_notebook_error)
-        self.notebook_manager.kernel.finished.connect(self._on_notebook_finished)
-        
-        self.agent = ToolExecutor(self.workspace_root)
         self.mcp_manager.load_from_settings(self.settings_data)
         self.mcp_manager.servers_changed.connect(self._update_mcp_status)
         self._recent_files = []
@@ -237,7 +227,13 @@ class MainWindow(QMainWindow):
         except Exception:
             log.info("Ollama not available at startup — continuing in offline mode")
         self._setup_ui()
-        
+
+        # Post-UI initialization (requires widgets from _setup_ui)
+        QTimer.singleShot(5000, self.plugin_manager.discover_plugins)
+        self.notebook_manager.kernel.output_received.connect(self._on_notebook_output)
+        self.notebook_manager.kernel.error_received.connect(self._on_notebook_error)
+        self.notebook_manager.kernel.finished.connect(self._on_notebook_finished)
+
         # Start background services
         scheduler.start()
         self._setup_tray()
@@ -461,6 +457,7 @@ class MainWindow(QMainWindow):
         # Editor area: vertical splitter with tabs on top, terminal below
         self.editor_splitter = QSplitter(Qt.Vertical)
         self.editor_tabs = EditorTabs()
+        self.editor_tabs.notebook_manager = self.notebook_manager
         self.editor_tabs.currentChanged.connect(self._on_editor_tab_changed)
         self.editor_splitter.addWidget(self.editor_tabs)
 
@@ -663,6 +660,7 @@ class MainWindow(QMainWindow):
         self.context_label.setStyleSheet("padding: 0 10px; color: #8b949e;")
         self.status_bar.addPermanentWidget(self.context_label)
 
+        self.editor_pos_label = QLabel("Ln 1, Col 1")
         self.editor_pos_label.setStyleSheet("padding: 0 10px; color: #8b949e;")
         self.status_bar.addPermanentWidget(self.editor_pos_label)
 
@@ -2913,6 +2911,7 @@ class MainWindow(QMainWindow):
         log.info(f"Plugin sidebar widget added: {name}")
 
     def _on_workspace_changed(self, path):
+        self.workspace_root = path
         self.terminal.set_cwd(path)
         self.git_panel.set_workspace(path)
         self.settings_data["workspace_dir"] = path

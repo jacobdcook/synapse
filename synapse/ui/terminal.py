@@ -10,6 +10,9 @@ from PyQt5.QtGui import QFont
 log = logging.getLogger(__name__)
 
 class TerminalWidget(QWidget):
+    output_received = pyqtSignal(str)
+    command_finished = pyqtSignal(str, str, int)  # command, output, exit_code
+
     def __init__(self, workspace_dir=None, parent=None):
         super().__init__(parent)
         self._cwd = str(workspace_dir) if workspace_dir else str(Path.home())
@@ -119,6 +122,7 @@ class TerminalWidget(QWidget):
         data = self._process.readAllStandardOutput().data().decode(errors='replace')
         self.output.insertPlainText(data)
         self.output.verticalScrollBar().setValue(self.output.verticalScrollBar().maximum())
+        self.output_received.emit(data)
 
     def _on_finished(self, exit_code, exit_status):
         if exit_code != 0:
