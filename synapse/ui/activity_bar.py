@@ -17,28 +17,28 @@ class ActivityBar(QWidget):
 
         self.buttons = []
 
-        self._add_action("\u2630", 0, "Explorer")
-        self._add_action("\u2709", 1, "Chat")
-        self._add_action("\u2b07", 2, "Models")
-        self._add_action("\U0001f4cb", 3, "Plan") # Clipboard icon
-        self._add_action("\u2756", 4, "Git")
-        self._add_action("\U0001f9e0", 5, "Knowledge")
-        self._add_action("\u270f", 6, "Templates") # Pencil icon
-        self._add_action("\U0001f4ca", 7, "Analytics") # Bar chart icon
-        self._add_action("\u22d4", 8, "Branch Tree")
-        self._add_action("\U0001f552", 9, "Schedules")
-        self._add_action("\U0001f3a8", 10, "Image Generation")
-        self._add_action("\u21c4", 11, "Workflows")
-        self._add_action("\U0001f516", 12, "Bookmarks")
-        self._add_action("\u2692", 13, "Agent Forge") # Hammer and pick
-        self._add_action("\U0001f3ea", 14, "Marketplace") # Store
-        self._add_action("\U0001f5d2", 15, "Delegative Board") # Spiral notepad
-        self._add_action("\U0001f3af", 16, "Fine-tuning Studio") # Bullseye
-        self._add_action("\U0001f41e", 17, "Debugger") # Ladybug (Debug)
-        self._add_action("\u2697", 18, "Testing") # Beaker icon (Testing)
-        self._add_action("\u25b6", 19, "Tasks") # Play/run
-        self._add_action("\u2328", 22, "REPL") # Keyboard icon (REPL)
-        self._add_action("\ud83e\udde9", 23, "Extensions") # Puzzle piece
+        self._add_action("\u2630", 0, "Explorer")       # ☰ hamburger
+        self._add_action("\u2709", 1, "Chat")            # ✉ envelope
+        self._add_action("\u2b07", 2, "Models")          # ⬇ down arrow
+        self._add_action("\u2611", 3, "Plan")            # ☑ ballot box
+        self._add_action("\u2756", 4, "Git")             # ❖ diamond
+        self._add_action("\u2605", 5, "Knowledge")       # ★ star
+        self._add_action("\u270f", 6, "Templates")       # ✏ pencil
+        self._add_action("\u2261", 7, "Analytics")       # ≡ triple bar
+        self._add_action("\u2387", 8, "Branch Tree")     # ⎇ branch
+        self._add_action("\u23f0", 9, "Schedules")       # ⏰ alarm clock
+        self._add_action("\u25d0", 10, "Image Generation") # ◐ circle half
+        self._add_action("\u21c4", 11, "Workflows")      # ⇄ arrows
+        self._add_action("\u2661", 12, "Bookmarks")      # ♡ heart
+        self._add_action("\u2692", 13, "Agent Forge")    # ⚒ hammer+pick
+        self._add_action("\u2302", 14, "Marketplace")    # ⌂ house
+        self._add_action("\u2637", 15, "Delegative Board") # ☷ trigram
+        self._add_action("\u2318", 16, "Fine-tuning Studio") # ⌘ command/tuning
+        self._add_action("\u2620", 17, "Debugger")       # ☠ skull (bug hunting)
+        self._add_action("\u2714", 18, "Testing")        # ✔ check mark
+        self._add_action("\u25b6", 19, "Tasks")          # ▶ play
+        self._add_action("\u2588", 22, "REPL")           # █ terminal block
+        self._add_action("\u2B29", 23, "Extensions")     # ⬩ small diamond
 
         self.spacer = QWidget()
         self.spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
