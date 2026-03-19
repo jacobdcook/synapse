@@ -215,13 +215,19 @@ class BaseAIWorker(QThread):
 
 class OllamaWorker(BaseAIWorker):
     _models_without_tool_support = set()
+    
+    def _model_keys(self):
+        keys = {self.model}
+        if self.model.endswith(":latest"):
+            keys.add(self.model[:-7])
+        return keys
 
     def run(self):
         _t0 = time.time()
         try_tools = (
             isinstance(self.tools, list)
             and len(self.tools) > 0
-            and self.model not in self._models_without_tool_support
+            and not any(k in self._models_without_tool_support for k in self._model_keys())
         )
         log.info("[OLLAMA] run() started model=%s use_tools=%s messages=%d tools=%d", self.model, try_tools, len(self.messages), len(self.tools or []))
         retried_after_unload = False
@@ -231,8 +237,8 @@ class OllamaWorker(BaseAIWorker):
         except Exception as e:
             err_text = str(e)
             if try_tools and ("does not support tools" in err_text.lower() or "400" in err_text):
-                if "does not support tools" in err_text.lower():
-                    self._models_without_tool_support.add(self.model)
+                for k in self._model_keys():
+                    self._models_without_tool_support.add(k)
                 log.warning(f"Model '{self.model}' does not support tools; retrying without tools")
                 try:
                     self._execute_request(use_tools=False)
@@ -695,9 +701,34 @@ class TitleWorker(QThread):
         self.messages = messages
         self.settings = settings or {}
 
+    def _flatten_for_title(self, messages):
+        out = []
+        for m in messages[:6]:
+            role = m.get("role", "")
+            if role == "tool_results":
+                parts = []
+                for tr in (m.get("tool_results") or (m.get("content") if isinstance(m.get("content"), list) else []) or []):
+                    if isinstance(tr, dict):
+                        parts.append(str(tr.get("content", ""))[:80])
+                    else:
+                        parts.append(str(tr)[:80])
+                if parts:
+                    out.append({"role": "user", "content": "[Tool output: " + " | ".join(parts)[:180] + "]"})
+                continue
+            if role not in ALLOWED_ROLES:
+                continue
+            c = m.get("content", "")
+            if isinstance(c, str) and c.strip():
+                out.append({"role": role, "content": c[:500]})
+            elif role == "assistant" and m.get("tool_calls"):
+                out.append({"role": role, "content": "[Used tools]"})
+        return out
+
     def run(self):
         try:
-            summary_msgs = list(self.messages)[:4]
+            summary_msgs = self._flatten_for_title(self.messages)
+            if not summary_msgs:
+                raise ValueError("No messages to summarize")
             summary_msgs.append({
                 "role": "user",
                 "content": "Summarize this conversation in 3-5 words for a title. Reply with ONLY the title, nothing else."
@@ -718,7 +749,7 @@ class TitleWorker(QThread):
             if self.model.startswith("gpt-") or self.model.startswith("o1-"):
                 payload = {
                     "model": self.model,
-                    "messages": [{"role": m["role"], "content": m.get("content", "")} for m in summary_msgs if m.get("role") in ALLOWED_ROLES],
+                    "messages": [{"role": m["role"], "content": m.get("content", "")} for m in summary_msgs],
                     "stream": False,
                     "temperature": 0.3
                 }
@@ -733,7 +764,7 @@ class TitleWorker(QThread):
             elif self.model.startswith("claude-"):
                 payload = {
                     "model": self.model,
-                    "messages": [{"role": m["role"], "content": m.get("content", "")} for m in summary_msgs if m.get("role") in ALLOWED_ROLES and m["role"] != "system"],
+                    "messages": [{"role": m["role"], "content": m.get("content", "")} for m in summary_msgs if m.get("role") != "system"],
                     "max_tokens": 100,
                     "stream": False,
                     "temperature": 0.3
@@ -756,7 +787,7 @@ class TitleWorker(QThread):
             else:
                 payload = json.dumps({
                     "model": self.model,
-                    "messages": [{"role": m["role"], "content": m.get("content", "")} for m in summary_msgs if m.get("role") in ALLOWED_ROLES],
+                    "messages": [{"role": m["role"], "content": m.get("content", "")} for m in summary_msgs],
                     "stream": False,
                     "options": {"temperature": 0.3, "num_ctx": 1024}
                 }).encode()
@@ -765,22 +796,20 @@ class TitleWorker(QThread):
                     data = json.loads(resp.read())
                     title = data.get("message", {}).get("content", "").strip().strip('"').strip("'")
 
-            # Strip thinking tags from models that use them (qwen3, deepseek, etc.)
+            # Strip thinking tags from models that use them (qwen3, deepseek, nemotron, etc.)
             if title:
                 title = re.sub(r'<think>.*?</think>', '', title, flags=re.DOTALL).strip()
+                title = re.sub(r'<\|.*?\|>', '', title, flags=re.DOTALL).strip()
                 title = title.strip('"').strip("'").strip()
-                # Truncate overly long titles
                 if len(title) >= 80:
                     title = title[:77] + "..."
-
-            if title:
-                self.title_ready.emit(self.conv_id, title)
-                return
+                if len(title) > 2:
+                    self.title_ready.emit(self.conv_id, title)
+                    return
             elif self.model.startswith("claude-") or ("/" in self.model and ":" not in self.model):
-                # OpenRouter fallback or Claude
                 payload = {
                     "model": self.model,
-                    "messages": [{"role": m["role"], "content": m.get("content", "")} for m in summary_msgs if m.get("role") in ALLOWED_ROLES and m["role"] != "system"],
+                    "messages": [{"role": m["role"], "content": m.get("content", "")} for m in summary_msgs if m.get("role") != "system"],
                     "stream": False,
                     "temperature": 0.3
                 }
@@ -818,7 +847,7 @@ class TitleWorker(QThread):
         except Exception as e:
             log.warning(f"Auto-title API failed: {e}")
 
-        # Fallback: use first few words of the user's first message
+        # Fallback: use first few words of the user's first message (always run if API returned empty)
         try:
             user_msg = next((m.get("content", "") for m in self.messages if m.get("role") == "user"), "")
             if user_msg:

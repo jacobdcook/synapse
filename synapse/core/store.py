@@ -43,12 +43,29 @@ class ConversationStore:
         self._ensure_index()
 
     def _ensure_index(self):
-        """Rebuild index from JSON files if empty or stale."""
+        """Rebuild index from JSON files if empty or stale, and prune orphans."""
         row = self._db.execute("SELECT COUNT(*) FROM conversations").fetchone()
         json_count = len(list(CONV_DIR.glob("*.json")))
         if row[0] == 0 and json_count > 0:
             log.info(f"Building conversation index from {json_count} files...")
             self._rebuild_index()
+        elif row[0] > 0:
+            self._prune_orphans()
+
+    def _prune_orphans(self):
+        """Remove index entries whose JSON files no longer exist."""
+        disk_ids = {f.stem for f in CONV_DIR.glob("*.json")}
+        db_ids = [r[0] for r in self._db.execute("SELECT id FROM conversations").fetchall()]
+        orphans = [cid for cid in db_ids if cid not in disk_ids]
+        if orphans:
+            for oid in orphans:
+                self._db.execute("DELETE FROM conversations WHERE id = ?", (oid,))
+                try:
+                    self._db.execute("DELETE FROM conv_fts WHERE id = ?", (oid,))
+                except Exception:
+                    pass
+            self._db.commit()
+            log.info(f"Pruned {len(orphans)} orphan index entries")
 
     def _rebuild_index(self):
         for f in CONV_DIR.glob("*.json"):

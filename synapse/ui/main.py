@@ -271,6 +271,16 @@ class MainWindow(QMainWindow):
         if not self.settings_data.get("onboarding_complete"):
             QTimer.singleShot(1000, self.run_onboarding)
 
+        # Auto-retitle untitled chats on startup (after Ollama/models are ready)
+        if self.settings_data.get("auto_title", True):
+            QTimer.singleShot(5000, self._retitle_all_untitled_quiet)
+
+    def _retitle_all_untitled_quiet(self):
+        """Startup version: only retitle if model combo is populated."""
+        if self.model_combo.count() == 0:
+            return
+        self._retitle_all_untitled()
+
     def run_onboarding(self):
         wizard = OnboardingWizard(self)
         if wizard.exec_():
@@ -312,6 +322,7 @@ class MainWindow(QMainWindow):
         self.sidebar.new_chat_requested.connect(self._new_chat)
         self.sidebar.new_chat_in_folder_requested.connect(self._new_chat_in_folder)
         self.sidebar.fork_requested.connect(self._fork_from_sidebar)
+        self.sidebar.retitle_requested.connect(self._on_retitle_requested)
         self.sidebar_stack.addWidget(self.sidebar)
 
         self.model_manager = ModelManagerPanel()
@@ -450,8 +461,6 @@ class MainWindow(QMainWindow):
         sidebar_layout.addWidget(self.mcp_marketplace)
         sidebar_layout.addWidget(self.task_board)
         sidebar_layout.addWidget(self.fine_tuning_panel)
-        sidebar_layout.addWidget(self.debug_sidebar)
-        sidebar_layout.addWidget(self.test_sidebar)
         sidebar_layout.addWidget(self.plugin_sidebar)
         self.problems_panel = ProblemsPanel()
         self.problems_panel.jump_requested.connect(self._on_problems_jump)
@@ -615,6 +624,8 @@ class MainWindow(QMainWindow):
         export_menu.addAction("HTML (.html)", lambda: self._export_current("html"))
         export_menu.addAction("JSON (.json)", lambda: self._export_current("json"))
         export_menu.addAction("PDF (.pdf)", lambda: self._export_current("pdf"))
+        export_menu.addSeparator()
+        export_menu.addAction("Retitle untitled chats", self._retitle_all_untitled)
         export_btn.setMenu(export_menu)
         self.toolbar.addWidget(export_btn)
 
@@ -1688,6 +1699,15 @@ class MainWindow(QMainWindow):
         self.status_label.setText(f"Agentic Finished. {stats.get('total_duration', '')}")
         log.info(f"Agentic loop finished: {stats}")
 
+        conv = self._active_stream_conv
+        if conv and self.settings_data.get("auto_title", True):
+            real_assistant = [m for m in conv["messages"] if m.get("role") == "assistant" and (m.get("content", "") if isinstance(m.get("content"), str) else "").strip()]
+            if len(real_assistant) >= 1 and conv.get("title") in ("New Chat", "Untitled", ""):
+                self._auto_title(conv)
+
+        self._active_stream_conv = None
+        self._active_stream_tab_index = -1
+
     def _start_generation(self, conv, tools, text, images, files, bypass_rag=False):
         """Legacy single-shot generation."""
         self.current_conv = conv
@@ -2274,10 +2294,11 @@ class MainWindow(QMainWindow):
         self.sum_action.setText(f"Summarize ({pct}% Context)")
 
         # Auto-title after first real assistant response (skip empty tool-call-only messages)
-        real_assistant = [m for m in conv["messages"] if m["role"] == "assistant" and (m.get("content", "") if isinstance(m.get("content"), str) else "").strip()]
-        log.debug(f"Auto-title check: {len(real_assistant)} real assistant msgs, title='{conv.get('title')}'")
-        if len(real_assistant) >= 1 and conv.get("title") == "New Chat":
-            self._auto_title(conv)
+        if self.settings_data.get("auto_title", True):
+            real_assistant = [m for m in conv["messages"] if m["role"] == "assistant" and (m.get("content", "") if isinstance(m.get("content"), str) else "").strip()]
+            log.debug(f"Auto-title check: {len(real_assistant)} real assistant msgs, title='{conv.get('title')}'")
+            if len(real_assistant) >= 1 and conv.get("title") in ("New Chat", "Untitled", ""):
+                self._auto_title(conv)
 
         # Smart Auto-Tagging (F12) - Trigger after first assistant turn or every 5 user messages
         user_msgs = [m for m in conv["messages"] if m["role"] == "user"]
@@ -3041,6 +3062,46 @@ class MainWindow(QMainWindow):
         self._load_conversation(conv_id)
         self._fork_conversation(len(conv["messages"]) - 1)
 
+    def _on_retitle_requested(self, conv_id):
+        conv = self.store.load(conv_id)
+        if not conv or not conv.get("messages"):
+            self.status_label.setText("No messages to generate title from")
+            return
+        real_assistant = [m for m in conv["messages"] if m.get("role") == "assistant" and (m.get("content", "") if isinstance(m.get("content"), str) else "").strip()]
+        if not real_assistant:
+            self.status_label.setText("Need at least one assistant response to generate title")
+            return
+        self._auto_title(conv)
+        self.status_label.setText("Generating title...")
+
+    def _retitle_all_untitled(self):
+        convs = self.store.list_conversations()
+        to_retitle = []
+        for c in convs:
+            conv = self.store.load(c["id"])
+            if not conv or not conv.get("messages"):
+                continue
+            if conv.get("title") not in ("New Chat", "Untitled", ""):
+                continue
+            real_assistant = [m for m in conv["messages"] if m.get("role") == "assistant" and (m.get("content", "") if isinstance(m.get("content"), str) else "").strip()]
+            if real_assistant:
+                to_retitle.append(conv)
+        if not to_retitle:
+            return
+        self._retitle_queue = to_retitle
+        self._process_next_retitle()
+
+    def _process_next_retitle(self):
+        queue = getattr(self, "_retitle_queue", None)
+        if not queue:
+            self.status_label.setText("Ready")
+            return
+        conv = queue.pop(0)
+        if not queue:
+            self._retitle_queue = None
+        self.status_label.setText(f"Retitling ({len(queue) + 1} remaining)" if queue else "Retitling last...")
+        self._auto_title(conv)
+
     def _on_navigate_branch(self, index, direction):
         if not self.current_conv:
             return
@@ -3746,6 +3807,8 @@ class MainWindow(QMainWindow):
                 self.store.save(conv)
                 self.sidebar.refresh(select_id=conv_id)
                 break
+        if getattr(self, "_retitle_queue", None):
+            QTimer.singleShot(200, self._process_next_retitle)
 
     def _on_lsp_diagnostics(self, uri, diagnostics):
         """Routes diagnostics from LSP to the correct editor tab."""

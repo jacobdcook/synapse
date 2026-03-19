@@ -2,7 +2,7 @@ import logging
 import os
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTabWidget, QWidget,
-    QPushButton, QLabel, QSlider, QSpinBox, QLineEdit,
+    QPushButton, QLabel, QSlider, QSpinBox, QDoubleSpinBox, QLineEdit,
     QComboBox, QCheckBox, QGroupBox, QFormLayout, QListWidget,
     QListWidgetItem, QMessageBox, QTableWidget, QTableWidgetItem,
     QKeySequenceEdit, QHeaderView, QProgressBar, QScrollArea, QFrame

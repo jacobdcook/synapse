@@ -55,6 +55,7 @@ class SidebarWidget(QWidget):
     new_chat_requested = pyqtSignal()
     new_chat_in_folder_requested = pyqtSignal(str)
     fork_requested = pyqtSignal(str)  # conv_id — fork as new branch
+    retitle_requested = pyqtSignal(str)  # conv_id — generate title for untitled chat
 
     def __init__(self, store, parent=None):
         super().__init__(parent)
@@ -329,6 +330,7 @@ class SidebarWidget(QWidget):
 
             pin_act = menu.addAction("Unpin" if is_pinned else "Pin")
             rename_act = menu.addAction("Rename")
+            generate_title_act = menu.addAction("Generate title")
             duplicate_act = menu.addAction("Duplicate")
             fork_act = menu.addAction("Fork (new branch)")
 
@@ -354,6 +356,8 @@ class SidebarWidget(QWidget):
                     self.refresh(select_id=conv_id)
             elif action == rename_act:
                 self._on_double_click(item, 0)
+            elif action == generate_title_act:
+                self.retitle_requested.emit(conv_id)
             elif action == duplicate_act:
                 self._duplicate_chat(conv_id)
             elif action == fork_act:
