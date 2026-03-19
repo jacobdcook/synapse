@@ -1,4 +1,4 @@
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QPushButton, QSizePolicy
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QPushButton
 from PyQt5.QtCore import Qt, pyqtSignal, QSize, QRect, QPoint
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QPen, QPainterPath, QPolygon
 
@@ -341,22 +341,19 @@ class ActivityBar(QWidget):
         self.setStyleSheet("background-color: #333333; border-right: 1px solid #1e1e1e;")
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 6, 0, 6)
-        layout.setSpacing(1)
+        layout.setContentsMargins(0, 4, 0, 4)
+        layout.setSpacing(2)
 
         self.buttons = []
         self._button_indices = []
         self._fg = "#858585"
         self._accent = "#ffffff"
+        self._layout = layout
 
         for index in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]:
             name = ICON_MAP.get(index, "explorer")
             tooltip = TOOLTIP_MAP.get(index, name)
             self._add_action(name, index, tooltip)
-
-        self.spacer = QWidget()
-        self.spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        layout.addWidget(self.spacer)
 
         self.settings_btn = QPushButton()
         self.settings_btn.setIcon(_make_icon("settings", self._fg, self.ICON_SIZE))
@@ -365,13 +362,14 @@ class ActivityBar(QWidget):
         self.settings_btn.setToolTip("Settings")
         self.settings_btn.setStyleSheet(self._btn_style())
         self.settings_btn.clicked.connect(self.settings_requested.emit)
-        layout.addWidget(self.settings_btn, alignment=Qt.AlignHCenter)
+        layout.addWidget(self.settings_btn, 0, alignment=Qt.AlignHCenter)
+        self._apply_button_metrics()
 
     def add_activity(self, icon, index, tooltip):
-        count = self.layout().count()
         btn = self._add_action(icon if icon in DRAW_FNS else "explorer", index, tooltip)
         self.layout().removeWidget(btn)
-        self.layout().insertWidget(count - 2, btn)
+        self.layout().insertWidget(len(self.buttons) - 1, btn, 0, Qt.AlignHCenter)
+        self._apply_button_metrics()
         return btn
 
     def _add_action(self, icon_name, index, tooltip):
@@ -384,17 +382,31 @@ class ActivityBar(QWidget):
         btn.setProperty("icon_name", icon_name)
         btn.setStyleSheet(self._btn_style())
         btn.clicked.connect(lambda: self._on_btn_clicked(index))
-        self.layout().addWidget(btn, alignment=Qt.AlignHCenter)
+        self.layout().addWidget(btn, 0, Qt.AlignHCenter)
         self.buttons.append(btn)
         self._button_indices.append(index)
         return btn
 
     def _btn_style(self):
         return (
-            f"QPushButton {{ background: transparent; border: none; border-radius: 6px; }}"
+            f"QPushButton {{ background: transparent; border: 1px solid transparent; border-radius: 6px; }}"
             f"QPushButton:hover {{ background: rgba(255,255,255,0.08); }}"
-            f"QPushButton:checked {{ background: rgba(255,255,255,0.12); border-left: 3px solid {self._accent}; }}"
+            f"QPushButton:checked {{ background: rgba(255,255,255,0.12); border-left: 2px solid {self._accent}; }}"
         )
+
+    def _apply_button_metrics(self):
+        total_icons = max(len(self.buttons) + 1, 1)  # + settings
+        available_h = max(self.height() - 12, 300)
+        size = max(26, min(42, int(available_h / total_icons) - 2))
+        icon_size = max(14, min(22, size - 12))
+        self.BUTTON_SIZE = size
+        self.ICON_SIZE = icon_size
+        for btn in self.buttons:
+            btn.setFixedSize(size, size)
+            btn.setIconSize(QSize(icon_size, icon_size))
+        self.settings_btn.setFixedSize(size, size)
+        self.settings_btn.setIconSize(QSize(icon_size, icon_size))
+        self._recolor_icons()
 
     def _on_btn_clicked(self, index):
         for i, btn in enumerate(self.buttons):
@@ -424,3 +436,7 @@ class ActivityBar(QWidget):
         self.settings_btn.setStyleSheet(style)
         self._recolor_icons()
         self.settings_btn.setIcon(_make_icon("settings", self._fg, self.ICON_SIZE))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._apply_button_metrics()
