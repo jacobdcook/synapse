@@ -5,6 +5,7 @@ import subprocess
 import threading
 import queue
 import time
+from pathlib import Path
 from typing import List, Dict, Any, Optional
 from PyQt5.QtCore import QObject, pyqtSignal
 
@@ -84,8 +85,8 @@ class NotebookKernel(QObject):
                     count = int(line.split("_")[-1].strip())
                     # How to map back to cell_id? Simplified for now.
                     self.finished.emit("unknown", count)
-                except:
-                    pass
+                except Exception as e:
+                    log.warning(f"Kernel execute error: {e}")
                 continue
             self.output_received.emit("unknown", line)
 
@@ -100,6 +101,43 @@ class NotebookManager(QObject):
         self.workspace_root = workspace_root
         self.kernel = NotebookKernel()
         self.current_notebook: List[NotebookCell] = []
+        self._exec_namespace: Dict[str, Any] = {}
+
+    def execute_cell_subprocess(self, code: str) -> tuple:
+        """Execute code via python -c, return (stdout, stderr, success)."""
+        try:
+            r = subprocess.run(
+                [sys.executable, "-c", code],
+                capture_output=True, text=True, timeout=60,
+                cwd=self.workspace_root or "."
+            )
+            return r.stdout, r.stderr, r.returncode == 0
+        except Exception as e:
+            return "", str(e), False
+
+    def get_variable_inspector(self) -> Dict[str, str]:
+        """Return dict of var name -> repr(value) from exec namespace."""
+        return {k: repr(v)[:200] for k, v in self._exec_namespace.items() if not k.startswith("_")}
+
+    def export_to_py(self, cells: List[NotebookCell], filepath: str):
+        lines = []
+        for c in cells:
+            if c.type == "code":
+                lines.append(c.source)
+                lines.append("")
+            else:
+                lines.append(f'# {c.source.replace(chr(10), " ")}')
+        Path(filepath).write_text("\n".join(lines), encoding="utf-8")
+
+    def export_to_html(self, cells: List[NotebookCell], filepath: str):
+        html = ["<!DOCTYPE html><html><head><meta charset='utf-8'></head><body>"]
+        for c in cells:
+            if c.type == "markdown":
+                html.append(f"<div class='md'>{c.source.replace('<', '&lt;')}</div>")
+            else:
+                html.append(f"<pre><code>{c.source.replace('<', '&lt;')}</code></pre>")
+        html.append("</body></html>")
+        Path(filepath).write_text("\n".join(html), encoding="utf-8")
 
     def load_notebook(self, filepath: str) -> List[NotebookCell]:
         try:

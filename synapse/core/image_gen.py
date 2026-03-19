@@ -1,3 +1,6 @@
+"""Image generation: SD, ComfyUI, OpenAI, HF."""
+__all__ = ["ImageGenWorker", "ImageGenerator", "GEN_DIR", "IMAGE_PRESETS"]
+
 import json
 import logging
 import urllib.request
@@ -13,6 +16,13 @@ log = logging.getLogger(__name__)
 
 GEN_DIR = Path.home() / ".local" / "share" / "synapse" / "generated"
 GEN_DIR.mkdir(parents=True, exist_ok=True)
+
+IMAGE_PRESETS = {
+    "Photorealistic": {"steps": 30, "cfg_scale": 7, "sampler_name": "DPM++ 2M Karras"},
+    "Artistic": {"steps": 25, "cfg_scale": 9, "sampler_name": "Euler a"},
+    "Fast Draft": {"steps": 15, "cfg_scale": 6, "sampler_name": "Euler a"},
+    "Anime": {"steps": 28, "cfg_scale": 7, "sampler_name": "DPM++ 2M Karras"},
+}
 
 class ImageGenWorker(QThread):
     finished = pyqtSignal(dict)  # { "path": str, "prompt": str, "success": bool, "error": str }
@@ -46,22 +56,26 @@ class ImageGenWorker(QThread):
             self.finished.emit({"success": False, "error": err})
 
     def _run_sd(self):
-        """Stable Diffusion A1111/Forge API implementation.
-        Requires AUTOMATIC1111 or Forge running locally.
-        """
+        """Stable Diffusion A1111/Forge API implementation."""
         url = self.params.get("url", DEFAULT_SD_URL)
-        endpoint = f"{url.rstrip('/')}/sdapi/v1/txt2img"
+        init_image = self.params.get("init_image")
+        endpoint = f"{url.rstrip('/')}/sdapi/v1/img2img" if init_image else f"{url.rstrip('/')}/sdapi/v1/txt2img"
         
+        preset = IMAGE_PRESETS.get(self.params.get("preset", ""), {})
         payload = {
             "prompt": self.params.get("prompt", ""),
             "negative_prompt": self.params.get("negative_prompt", ""),
             "seed": self.params.get("seed", -1),
-            "steps": self.params.get("steps", 20),
+            "steps": preset.get("steps", self.params.get("steps", 20)),
             "width": self.params.get("width", 512),
             "height": self.params.get("height", 512),
-            "cfg_scale": self.params.get("cfg_scale", 7),
-            "sampler_name": "Euler a",
+            "cfg_scale": preset.get("cfg_scale", self.params.get("cfg_scale", 7)),
+            "sampler_name": preset.get("sampler_name", "Euler a"),
         }
+        if init_image:
+            with open(init_image, "rb") as f:
+                payload["init_images"] = [base64.b64encode(f.read()).decode()]
+            payload["denoising_strength"] = self.params.get("denoising_strength", 0.7)
 
         req = urllib.request.Request(
             endpoint,

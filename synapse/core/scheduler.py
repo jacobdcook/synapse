@@ -57,13 +57,15 @@ class TaskScheduler(QObject):
         except Exception as e:
             log.error(f"Failed to save tasks: {e}")
 
-    def add_task(self, prompt, model, conversation_id, schedule_time):
+    def add_task(self, prompt, model, conversation_id, schedule_time, cron_expr=None, trigger=None):
         task = {
             "id": str(uuid.uuid4()),
             "prompt": prompt,
             "model": model,
             "conversation_id": conversation_id,
-            "schedule_time": schedule_time, # ISO format
+            "schedule_time": schedule_time,
+            "cron_expr": cron_expr,
+            "trigger": trigger,
             "status": "pending",
             "created_at": datetime.now(timezone.utc).isoformat()
         }
@@ -75,18 +77,40 @@ class TaskScheduler(QObject):
         self.tasks = [t for t in self.tasks if t["id"] != task_id]
         self._save_tasks()
 
+    def _cron_matches(self, cron_expr: str, dt: datetime) -> bool:
+        if not cron_expr:
+            return False
+        parts = cron_expr.split()
+        if len(parts) < 5:
+            return False
+        try:
+            m, h, d, mo, wd = parts[0], parts[1], parts[2], parts[3], parts[4]
+            if m != "*" and int(m) != dt.minute: return False
+            if h != "*" and int(h) != dt.hour: return False
+            if d != "*" and int(d) != dt.day: return False
+            if mo != "*" and int(mo) != dt.month: return False
+            if wd != "*" and int(wd) != dt.weekday(): return False
+            return True
+        except (ValueError, IndexError):
+            return False
+
     def _check_tasks(self):
         now = datetime.now(timezone.utc)
         for task in self.tasks:
-            if task["status"] == "pending":
-                try:
+            if task["status"] != "pending":
+                continue
+            try:
+                if task.get("cron_expr"):
+                    if self._cron_matches(task["cron_expr"], now):
+                        self._execute_task(task)
+                else:
                     sched_time = datetime.fromisoformat(task["schedule_time"])
                     if sched_time.tzinfo is None:
                         sched_time = sched_time.replace(tzinfo=timezone.utc)
                     if sched_time <= now:
                         self._execute_task(task)
-                except Exception as e:
-                    log.error(f"Error parsing schedule time for task {task['id']}: {e}")
+            except Exception as e:
+                log.error(f"Error parsing schedule for task {task['id']}: {e}")
 
     def _execute_task(self, task):
         task["status"] = "running"

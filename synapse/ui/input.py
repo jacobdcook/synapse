@@ -543,7 +543,7 @@ class InputWidget(QWidget):
 
         outer_layout.addLayout(input_row)
 
-        self.char_count_label = QLabel("0 chars | 0 words")
+        self.char_count_label = QLabel("0 chars | 0 words | ~0 tokens")
         self.char_count_label.setStyleSheet("color: #555; font-size: 10px; padding-left: 48px;")
         self.text_edit.textChanged.connect(self._update_char_count)
         outer_layout.addWidget(self.char_count_label)
@@ -561,7 +561,8 @@ class InputWidget(QWidget):
         text = self.text_edit.toPlainText()
         chars = len(text)
         words = len(text.split()) if text.strip() else 0
-        self.char_count_label.setText(f"{chars} chars | {words} words")
+        tokens = len(text) // 4
+        self.char_count_label.setText(f"{chars} chars | {words} words | ~{tokens} tokens")
 
     def _submit(self):
         text = self.text_edit.toPlainText().strip()

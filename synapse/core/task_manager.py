@@ -5,6 +5,7 @@ import uuid
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 log = logging.getLogger(__name__)
 
@@ -61,7 +62,8 @@ class TaskManager:
             "created_at": datetime.now(timezone.utc).isoformat(),
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "progress": 0,
-            "subtasks": []
+            "subtasks": [],
+            "dependencies": [],
         }
         self.tasks.append(task)
         self.save()
@@ -86,3 +88,24 @@ class TaskManager:
 
     def move_task(self, task_id, new_status):
         return self.update_task(task_id, status=new_status)
+
+    def add_subtask(self, task_id: str, title: str) -> Optional[dict]:
+        for task in self.tasks:
+            if task["id"] == task_id:
+                st = {"id": str(uuid.uuid4()), "title": title, "done": False}
+                task.setdefault("subtasks", []).append(st)
+                task["updated_at"] = datetime.now(timezone.utc).isoformat()
+                self.save()
+                return st
+        return None
+
+    def add_dependency(self, task_id: str, depends_on_id: str) -> bool:
+        for task in self.tasks:
+            if task["id"] == task_id:
+                deps = task.setdefault("dependencies", [])
+                if depends_on_id not in deps:
+                    deps.append(depends_on_id)
+                task["updated_at"] = datetime.now(timezone.utc).isoformat()
+                self.save()
+                return True
+        return False

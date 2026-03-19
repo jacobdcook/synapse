@@ -26,7 +26,25 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
+
+class _StderrFilter:
+    """Filters Qt QSS 'Unknown property cursor' warnings from stderr."""
+    def __init__(self, inner):
+        self._inner = inner
+
+    def write(self, s):
+        if "Unknown property cursor" not in s:
+            self._inner.write(s)
+
+    def flush(self):
+        self._inner.flush()
+
+    def writable(self):
+        return True
+
+
 def main():
+    sys.stderr = _StderrFilter(sys.stderr)
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
 

@@ -115,9 +115,18 @@ class LSPManager(QObject):
         """Requests definition location for a specific position."""
         client = self.get_client(lang)
         if not client: return None
-        
         uri = Path(filepath).as_uri()
         return client.send_request("textDocument/definition", {
+            "textDocument": {"uri": uri},
+            "position": {"line": line, "character": column}
+        })
+
+    def request_completion(self, filepath, lang, line, column):
+        """Requests completions at position."""
+        client = self.get_client(lang)
+        if not client: return None
+        uri = Path(filepath).as_uri()
+        return client.send_request("textDocument/completion", {
             "textDocument": {"uri": uri},
             "position": {"line": line, "character": column}
         })

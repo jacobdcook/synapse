@@ -217,14 +217,17 @@ class OllamaWorker(BaseAIWorker):
     _models_without_tool_support = set()
 
     def run(self):
+        _t0 = time.time()
         try_tools = (
             isinstance(self.tools, list)
             and len(self.tools) > 0
             and self.model not in self._models_without_tool_support
         )
+        log.info("[OLLAMA] run() started model=%s use_tools=%s messages=%d tools=%d", self.model, try_tools, len(self.messages), len(self.tools or []))
         retried_after_unload = False
         try:
             self._execute_request(use_tools=try_tools)
+            log.info("[OLLAMA] run() finished (elapsed=%.1fs)", time.time() - _t0)
         except Exception as e:
             err_text = str(e)
             if try_tools and ("does not support tools" in err_text.lower() or "400" in err_text):
@@ -303,17 +306,23 @@ class OllamaWorker(BaseAIWorker):
             data = json.dumps(payload).encode()
             req = urllib.request.Request(f"{get_ollama_url()}/api/chat", data=data, headers={"Content-Type": "application/json"})
 
+            _t_req = time.time()
+            log.info("[OLLAMA] urlopen starting (timeout=300)")
             full_text = ""
             stats = {}
             tool_calls = []
-            
+            first_chunk = True
+
             with urllib.request.urlopen(req, timeout=300) as resp:
                 for line in resp:
                     if self._stop_flag: break
+                    if first_chunk:
+                        log.info("[OLLAMA] first chunk received (elapsed=%.1fs)", time.time() - _t_req)
+                        first_chunk = False
                     try:
                         chunk = json.loads(line.decode().strip())
                     except (json.JSONDecodeError, UnicodeDecodeError): continue
-                    
+
                     if "message" in chunk:
                         msg_chunk = chunk["message"]
                         if "content" in msg_chunk:
@@ -321,8 +330,9 @@ class OllamaWorker(BaseAIWorker):
                             delay = self.gen_params.get("streaming_delay", 0.0)
                             if delay > 0: time.sleep(delay)
                         if "tool_calls" in msg_chunk: tool_calls.extend(msg_chunk["tool_calls"])
-                    
+
                     if chunk.get("done"):
+                        log.info("[OLLAMA] chunk.done=True (elapsed=%.1fs, eval_count=%s)", time.time() - _t_req, chunk.get("eval_count"))
                         stats = {
                             "total_duration": chunk.get("total_duration", 0),
                             "eval_count": chunk.get("eval_count", 0),
@@ -331,11 +341,12 @@ class OllamaWorker(BaseAIWorker):
                         }
                         if chunk.get("done_reason") == "length" or self._is_truncated(full_text, chunk.get("done_reason")):
                             self.truncated.emit()
-            
+
             if tool_calls:
+                log.info("[OLLAMA] emitting tool_calls_received n=%d", len(tool_calls))
                 self.tool_calls_received.emit(tool_calls)
-                if not full_text.strip(): return
-            
+
+            log.info("[OLLAMA] emitting response_finished (elapsed=%.1fs)", time.time() - _t_req)
             self.response_finished.emit(full_text, stats)
         except Exception as e:
             log.error(f"Ollama error: {e}")

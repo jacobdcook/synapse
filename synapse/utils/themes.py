@@ -339,23 +339,29 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
+_REQUIRED_THEME_KEYS = ("qss",)
+
 def load_external_themes():
-    """Load additional themes from user config directory."""
+    """Load additional themes from user config directory.
+    Schema: {"name": str, "qss": str, "bg", "fg", "accent", "sidebar_bg", "header_bg", "input_bg", "border"}
+    Missing optional keys fall back to apply_theme defaults.
+    """
     external_dir = Path.home() / ".local" / "share" / "synapse" / "themes"
     if not external_dir.exists():
         external_dir.mkdir(parents=True, exist_ok=True)
         return {}
-        
     themes = {}
     for theme_file in external_dir.glob("*.json"):
         try:
             with open(theme_file, "r") as f:
                 theme_data = json.load(f)
-                theme_name = theme_data.get("name", theme_file.stem)
-                themes[theme_name] = theme_data
+            if not all(k in theme_data and theme_data[k] for k in _REQUIRED_THEME_KEYS):
+                log.warning(f"Theme {theme_file} missing required keys {_REQUIRED_THEME_KEYS}, skipping")
+                continue
+            theme_name = theme_data.get("name", theme_file.stem)
+            themes[theme_name] = theme_data
         except Exception as e:
             log.warning(f"Failed to load theme {theme_file}: {e}")
-            
     return themes
 
 def get_all_themes():

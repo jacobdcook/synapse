@@ -118,5 +118,6 @@ class PythonSymbolExtractor:
         """Fallback for ast.unparse if not available."""
         try:
             return ast.unparse(node)
-        except:
+        except Exception as e:
+            log.warning(f"ast.unparse failed: {e}")
             return "unknown"

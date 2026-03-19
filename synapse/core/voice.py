@@ -1,3 +1,6 @@
+"""Voice: STT/TTS with VAD and voice commands."""
+__all__ = ["VoiceManager", "VOICE_COMMANDS"]
+
 import os
 import logging
 import time
@@ -19,11 +22,14 @@ from PyQt5.QtCore import QObject, pyqtSignal, QTimer
 
 log = logging.getLogger(__name__)
 
+VOICE_COMMANDS = ["new chat", "stop", "read that again"]
+
 class VoiceManager(QObject):
     transcription_result = pyqtSignal(str)
-    recording_status = pyqtSignal(bool) # True = recording, False = idle
-    mic_level = pyqtSignal(float)      # 0.0 to 1.0
-    playback_status = pyqtSignal(bool) # True = speaking, False = silent
+    voice_command = pyqtSignal(str)
+    recording_status = pyqtSignal(bool)
+    mic_level = pyqtSignal(float)
+    playback_status = pyqtSignal(bool)
     error_occurred = pyqtSignal(str)
 
     def __init__(self, model_size="base"):
@@ -41,6 +47,10 @@ class VoiceManager(QObject):
         self._silence_start = None
         self._tts_generation = 0
         self.tts_voice = "en-US-AndrewNeural"
+        self.tts_engine = "edge"
+        self.tts_speed = 1.0
+        self._tts_queue = []
+        self._tts_playing = False
 
     @property
     def is_recording(self):
@@ -183,18 +193,44 @@ class VoiceManager(QObject):
                 log.debug(f"Playback stop cleanup: {e}")
         self.playback_status.emit(False)
 
-    def speak(self, text, voice="en-US-AndrewNeural"):
+    def speak(self, text, voice=None):
         if not text:
+            return
+        voice = voice or self.tts_voice
+        if self.tts_engine == "queue" and self._tts_playing:
+            self._tts_queue.append((text, voice))
             return
         self.stop_playback()
         self._tts_generation += 1
         threading.Thread(target=self._run_tts, args=(text, voice), daemon=True).start()
 
-    def _run_tts(self, text, voice):
+    def speak_queue(self, text, voice=None):
+        voice = voice or self.tts_voice
+        self._tts_queue.append((text, voice))
+        if not self._tts_playing:
+            self._play_next_queued()
+
+    def _play_next_queued(self):
+        if not self._tts_queue:
+            self._tts_playing = False
+            return
+        self._tts_playing = True
+        text, voice = self._tts_queue.pop(0)
+        self.stop_playback()
+        self._tts_generation += 1
+        threading.Thread(target=self._run_tts, args=(text, voice, True), daemon=True).start()
+
+    def _run_tts(self, text, voice, from_queue=False):
         try:
-            asyncio.run(self._generate_and_play(text, voice))
+            if self.tts_engine == "espeak":
+                self._play_espeak(text)
+            else:
+                asyncio.run(self._generate_and_play(text, voice))
         except Exception as e:
             log.error(f"TTS Thread Error: {e}")
+        finally:
+            if from_queue and self._tts_playing:
+                QTimer.singleShot(0, self._play_next_queued)
 
     async def _generate_and_play(self, text, voice):
         output_path = None
@@ -202,8 +238,8 @@ class VoiceManager(QObject):
         try:
             import edge_tts
             self.playback_status.emit(True)
-
-            communicate = edge_tts.Communicate(text, voice)
+            rate = f"{int((self.tts_speed - 1) * 100):+d}%" if self.tts_speed != 1.0 else "+0%"
+            communicate = edge_tts.Communicate(text, voice, rate=rate)
             with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
                 output_path = f.name
 
@@ -244,3 +280,20 @@ class VoiceManager(QObject):
                     os.remove(output_path)
                 except OSError:
                     pass
+
+    def _play_espeak(self, text):
+        self.playback_status.emit(True)
+        try:
+            rate = int(175 * self.tts_speed)
+            self._playback_process = subprocess.Popen(
+                ["espeak", "-s", str(rate), text],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+            self._playback_process.wait()
+        except FileNotFoundError:
+            self.error_occurred.emit("espeak not found. Install: sudo apt install espeak")
+        except Exception as e:
+            self.error_occurred.emit(f"espeak error: {e}")
+        finally:
+            self.playback_status.emit(False)
+            self._playback_process = None

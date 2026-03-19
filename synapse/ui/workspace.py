@@ -110,8 +110,8 @@ class WorkspacePanel(QWidget):
                 item.setData(0, Qt.UserRole, str(entry))
                 if entry.is_dir():
                     self._populate_tree(entry, item)
-        except PermissionError:
-            pass
+        except PermissionError as e:
+            log.warning(f"Workspace permission error: {e}")
 
     def _on_item_double_clicked(self, item, col):
         path = item.data(0, Qt.UserRole)

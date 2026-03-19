@@ -97,8 +97,11 @@ class ChatRenderer:
                 preview_btn = f'<button class="cb-btn cb-preview" onclick="window.location.href=\'action://previewartifact/{ci}\'">&#128065; Open in Canvas</button>'
 
             run_btn = ""
+            run_term_btn = ""
             if lang_lower in ('python', 'python3', 'py'):
                 run_btn = f'<button class="cb-btn cb-run" onclick="window.location.href=\'action://runcode/{ci}\'">&#9654; Run</button>'
+            if lang_lower in ('python', 'python3', 'py', 'bash', 'sh', 'shell'):
+                run_term_btn = f'<button class="cb-btn cb-run" onclick="window.location.href=\'action://runinterminal/{ci}\'">Terminal</button>'
 
             # Include filename in apply/save actions if present
             fn_param = f"/{html_module.escape(filename)}" if filename else ""
@@ -109,6 +112,7 @@ class ChatRenderer:
                 f'<button class="cb-btn" onclick="window.location.href=\'action://savecode/{ci}{fn_param}\'">Save</button>'
                 f'{preview_btn}'
                 f'{run_btn}'
+                f'{run_term_btn}'
             )
 
             inner_code = code_content[5:]  # strip leading <pre>
@@ -131,6 +135,7 @@ class ChatRenderer:
             )
         html = re.sub(r'!\[.*?\]\((data:image/[^)]+)\)', _img_replace, html)
         html = re.sub(r'!\[.*?\]\((https?://[^\s)]+\.(?:png|jpg|jpeg|gif|webp|svg))\)', _img_replace, html)
+        html = re.sub(r'!\[.*?\]\((file://[^)]+)\)', _img_replace, html)
 
         return html
 

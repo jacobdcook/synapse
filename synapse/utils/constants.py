@@ -87,13 +87,28 @@ You have access to advanced tools and long-term memory.
 1. MEMORY: Use 'remember_fact' for persistent info and 'update_preference' for user style.
 2. PLANNING: For complex tasks, use 'update_plan' to maintain a visible checklist in the sidebar.
 3. AGENTIC LOOPS: You can run multiple tool turns automatically. If a command fails, use 'run_test' and self-correct.
-Prioritize efficiency, quality, and clear communication."""
+Prioritize efficiency, quality, and clear communication.
+
+When the user pastes long content (product pages, articles, docs):
+1. Extract and answer their explicit question first. Never respond with a generic intro.
+2. If they provide two items to compare, compare them and give a clear recommendation.
+3. If they ask for a specific size/option, state it explicitly."""
 DARK_THEME_QSS = THEMES["One Dark"]["qss"]
 
 # Keyboard Shortcuts
 DEFAULT_SHORTCUTS = {
+    "palette": "Ctrl+K",
     "new_chat": "Ctrl+N",
-    "toggle_sidebar": "Ctrl+B",
+    "close_tab": "Ctrl+W",
+    "next_tab": "Ctrl+Tab",
+    "prev_tab": "Ctrl+Shift+Tab",
+    "send": "Ctrl+Enter",
+    "send_agentic": "Ctrl+Shift+Enter",
+    "toggle_sidebar": "Ctrl+/",
+    "clear": "Ctrl+L",
+    "regenerate": "Ctrl+R",
+    "cancel": "Escape",
+    "toggle_sidebar_alt": "Ctrl+B",
     "save_file": "Ctrl+S",
     "rollback": "Ctrl+Z",
     "command_palette": "Ctrl+Shift+P",
@@ -147,7 +162,9 @@ def estimate_tokens(text):
     return max(len(text.split()), int(len(text) / 3.5))
 
 def get_theme_qss(name):
-    return THEMES.get(name, THEMES["One Dark"])["qss"]
+    from .themes import get_all_themes
+    theme = get_all_themes().get(name, THEMES["One Dark"])
+    return theme.get("qss", THEMES["One Dark"]["qss"])
 
 import mimetypes
 from datetime import datetime as _dt
@@ -281,6 +298,7 @@ def _build_chat_template():
         '.msg-content table { border-collapse: collapse; margin: 10px 0; font-size: 13px; }\n'
         '.msg-content th, .msg-content td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }\n'
         '.msg-content th { background: var(--surface2); font-weight: 600; }\n'
+        '.msg-content table tbody tr:nth-child(even) { background: rgba(0,0,0,.15); }\n'
         '.msg-content blockquote {\n'
         '  border-left: 3px solid var(--accent);\n'
         '  padding: 4px 12px;\n'
@@ -529,6 +547,9 @@ def _build_chat_template():
         '  50% { opacity: .4; }\n'
         '}\n'
         '.tool-running .tool-icon { animation: tool-pulse 1.5s ease-in-out infinite; }\n'
+        '@keyframes stream-blink { 50% { opacity: 0; } }\n'
+        '#streaming-content::after { content: "|"; animation: stream-blink 1s step-end infinite; color: var(--accent); }\n'
+        '.thinking-placeholder { color: var(--fg3); font-style: italic; }\n'
         '\n'
         'PYGMENTS_CSS\n'
         '</style>\n</head>\n<body>\n'
@@ -573,6 +594,8 @@ def _build_chat_template():
         'function appendStreamToken(token) {\n'
         '  var el = document.getElementById("streaming-content");\n'
         '  if (!el) return;\n'
+        '  var ph = document.querySelector(".thinking-placeholder");\n'
+        '  if (ph && el.textContent === "") ph.style.display = "none";\n'
         '  el.textContent += token;\n'
         '  _scrollBottom();\n'
         '}\n'
@@ -594,6 +617,13 @@ def _build_chat_template():
         '  if (!body) return;\n'
         '  body.classList.toggle("open");\n'
         '  if (chev) chev.classList.toggle("open");\n'
+        '}\n'
+        'function injectPlan(planText) {\n'
+        '  var div = document.createElement("div");\n'
+        '  div.className = "think-block";\n'
+        '  div.innerHTML = \'<div class="think-header" onclick="this.nextElementSibling.classList.toggle(\\\'open\\\')">Plan</div><div class="think-body open"><pre style="margin:0;white-space:pre-wrap;">\' + planText + \'</pre></div>\';\n'
+        '  document.body.appendChild(div);\n'
+        '  _scrollBottom();\n'
         '}\n'
         '    try { mermaid.initialize({ startOnLoad: true, theme: "dark", securityLevel: "loose" }); } catch(e) { console.error("Mermaid init failed:", e); }\n'
         'renderMathInElement(document.body, {\n'

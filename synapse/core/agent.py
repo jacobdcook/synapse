@@ -1,13 +1,15 @@
 import os
 import subprocess
 import platform
-import shlex
 import json
 import logging
+import time
+import hashlib
 from pathlib import Path
 from PyQt5.QtCore import QObject, pyqtSignal
 from .memory import MemoryManager
 from .code_executor import CodeExecutor
+from .tool_audit import ToolAuditLog
 
 log = logging.getLogger(__name__)
 
@@ -22,9 +24,10 @@ class ToolRegistry:
             "parameters": parameters
         }
 
-    def get_tool_definitions(self):
+    def get_tool_definitions(self, names=None):
+        items = self._tools.items() if names is None else [(n, self._tools[n]) for n in names if n in self._tools]
         definitions = []
-        for name, tool in self._tools.items():
+        for name, tool in items:
             definitions.append({
                 "type": "function",
                 "function": {
@@ -55,7 +58,67 @@ class ToolExecutor(QObject):
         self.registry = ToolRegistry()
         self.memory = MemoryManager()
         self.code_executor = CodeExecutor(workspace_dir)
+        self._audit = ToolAuditLog()
         self._setup_default_tools()
+
+    def execute(self, name: str, arguments: dict):
+        """Execute a tool with audit, timing, verification, and retries."""
+        if name not in self.registry._tools:
+            return None
+        start = time.time()
+        result = None
+        error_msg = None
+        success = False
+        for attempt in range(3):
+            try:
+                raw = self.registry.execute(name, arguments)
+                if raw is None:
+                    continue
+                result = str(raw)
+                if name == "write_file" and "Successfully wrote" in result:
+                    path = arguments.get("path")
+                    content = arguments.get("content", "")
+                    if path and self.workspace_dir:
+                        full = (self.workspace_dir / path).resolve()
+                        if full.exists():
+                            actual = full.read_text(errors="replace")
+                            if hashlib.sha256(actual.encode()).hexdigest() != hashlib.sha256(content.encode()).hexdigest():
+                                if attempt == 0:
+                                    self.registry._tools[name]["function"](**arguments)
+                                    continue
+                                result += "\n[VERIFICATION WARNING: File content does not match what was written]"
+                    success = True
+                    break
+                elif name == "run_command" and "Exit code" in result:
+                    try:
+                        code = int(result.split("Exit code ")[1].split("\n")[0])
+                        if code != 0:
+                            result += f"\n[WARNING: exit code {code}]"
+                    except (IndexError, ValueError):
+                        pass
+                    success = True
+                    break
+                elif name in ("web_search", "scrape_url"):
+                    if not result or "Search error" in result or "Scraping error" in result:
+                        if attempt < 2:
+                            time.sleep(1)
+                            continue
+                        result += "\n[WARNING: empty or error result]"
+                    success = True
+                    break
+                else:
+                    success = True
+                    break
+            except Exception as e:
+                error_msg = str(e)
+                if name in ("web_search", "scrape_url") and attempt < 2:
+                    time.sleep(1)
+                    continue
+                result = f"Error executing '{name}': {error_msg}"
+                break
+        duration_ms = (time.time() - start) * 1000
+        self._audit.log_call(name, arguments, result or "", duration_ms, success, error_msg)
+        return result
 
     def _setup_default_tools(self):
         self.registry.register(
@@ -86,7 +149,7 @@ class ToolExecutor(QObject):
         self.registry.register(
             "run_command",
             self._run_command,
-            "Run a terminal command. Use with caution.",
+            "Run a shell command (ls, date, wc, grep, etc). Do NOT use for creating workspace files—use write_file instead.",
             {
                 "type": "object",
                 "properties": {
@@ -154,6 +217,34 @@ class ToolExecutor(QObject):
                     "plan": {"type": "array", "items": {"type": "string"}, "description": "List of steps in the plan."}
                 },
                 "required": ["plan"]
+            }
+        )
+        self.registry.register(
+            "run_workflow",
+            self._run_workflow,
+            "Run a predefined workflow. Use for code review, research, or test-and-fix tasks.",
+            {
+                "type": "object",
+                "properties": {
+                    "template": {"type": "string", "description": "Workflow template: code_review, research, test_fix."},
+                    "input_query": {"type": "string", "description": "Input for research workflow."},
+                    "input_path": {"type": "string", "description": "File path for code review workflow."}
+                },
+                "required": ["template"]
+            }
+        )
+        self.registry.register(
+            "search_workspace",
+            self._search_workspace,
+            "Search for text in the workspace. Returns matching file paths, line numbers, and snippets.",
+            {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "The search query (text or regex pattern)."},
+                    "mode": {"type": "string", "description": "Search mode: 'text' or 'regex'. Default: text."},
+                    "file_type": {"type": "string", "description": "Optional file extension filter, e.g. '.py'."}
+                },
+                "required": ["query"]
             }
         )
         self.registry.register(
@@ -233,19 +324,19 @@ class ToolExecutor(QObject):
             return f"Error writing file {path}: {e}"
 
     def _run_command(self, command):
+        cmd_lower = command.lower().strip()
+        for pat in ("rm -rf /", "rm -rf /*", "dd if=", "mkfs.", "format "):
+            if pat in cmd_lower:
+                return f"Blocked: dangerous command pattern detected."
         try:
-            # Use platform-aware shlex splitting
-            use_posix = (os.name == 'posix')
-            args = shlex.split(command, posix=use_posix)
-            
-            # On Windows, some commands need shell=True to find builtins
-            is_windows = (os.name == 'nt')
-            
+            cwd = str(self.workspace_dir) if self.workspace_dir else None
             result = subprocess.run(
-                args, capture_output=True, text=True,
-                cwd=str(self.workspace_dir) if self.workspace_dir else None,
+                command,
+                capture_output=True,
+                text=True,
+                cwd=cwd,
                 timeout=60,
-                shell=is_windows
+                shell=True,
             )
             output = result.stdout
             if result.stderr:
@@ -333,6 +424,39 @@ class ToolExecutor(QObject):
             return f"Tests passed!\n{res}"
         else:
             return f"Tests failed. Please analyze the output and fix the errors:\n{res}"
+
+    def _run_workflow(self, template, input_query="", input_path=""):
+        from .workflow_templates import get_template
+        from .workflow import WorkflowExecutor
+        from .api import WorkerFactory
+        wf = get_template(template)
+        if not wf:
+            return f"Unknown workflow template: {template}. Use: code_review, research, test_fix."
+        wf.nodes[0].prompt_template = wf.nodes[0].prompt_template.replace("{{input_query}}", input_query).replace("{{input_path}}", input_path)
+        executor = WorkflowExecutor(wf, None)
+        result = [None]
+        def on_done(text):
+            result[0] = text
+        executor.workflow_finished.connect(on_done)
+        executor.start()
+        executor.wait(180000)
+        return result[0] or "Workflow completed."
+
+    def _search_workspace(self, query, mode="text", file_type=None):
+        from ..ui.workspace_search import search_workspace_sync
+        if not self.workspace_dir:
+            return "No workspace directory set."
+        use_regex = (mode or "text").lower() == "regex"
+        results = search_workspace_sync(
+            self.workspace_dir, query,
+            use_regex=use_regex, file_type=file_type, limit=50
+        )
+        if not results:
+            return f"No matches for '{query}' in workspace."
+        lines = []
+        for rel_path, line_num, snippet in results[:30]:
+            lines.append(f"{rel_path}:{line_num}: {snippet}")
+        return f"Found {len(results)} matches:\n" + "\n".join(lines)
 
     def _generate_image(self, prompt, negative_prompt="", width=512, height=512, steps=20, cfg_scale=7):
         """Generate an image using local Stable Diffusion or ComfyUI."""

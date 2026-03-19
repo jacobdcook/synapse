@@ -10,6 +10,17 @@ from datetime import datetime
 
 log = logging.getLogger(__name__)
 
+DANGEROUS_PATTERNS = ["rm -rf /", "rm -rf /*", "rm -rf / ", "dd if=", "mkfs.", "format c:", ":(){ :|:& };:"]
+
+
+def _apply_sandbox_limits():
+    try:
+        import resource
+        resource.setrlimit(resource.RLIMIT_AS, (256 * 1024 * 1024, 256 * 1024 * 1024))
+        resource.setrlimit(resource.RLIMIT_CPU, (30, 30))
+    except (ImportError, OSError, ValueError):
+        pass
+
 class CodeExecutor:
     """
     Executes Python code in a sandboxed-ish subprocess and captures output/plots.
@@ -33,14 +44,15 @@ class CodeExecutor:
         code_path.write_text(wrapped_code)
 
         try:
-            # Use Popen for better control over termination
+            preexec = _apply_sandbox_limits if os.name != "nt" else None
             process = subprocess.Popen(
                 [sys.executable, str(code_path)],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
                 cwd=str(self.workspace_dir),
-                start_new_session=(os.name != 'nt')
+                start_new_session=(os.name != 'nt'),
+                preexec_fn=preexec,
             )
             
             try:
@@ -83,8 +95,8 @@ class CodeExecutor:
             try:
                 if 'process' in locals() and process.poll() is None:
                     process.kill()
-            except:
-                pass
+            except Exception as e:
+                log.warning(f"Process kill: {e}")
             return {
                 "stdout": "",
                 "stderr": f"Execution error: {str(e)}",

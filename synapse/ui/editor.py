@@ -325,7 +325,8 @@ class AutocompleteManager(QWidget):
 class CodeEditor(QPlainTextEdit):
     cursor_changed = pyqtSignal(int, int)
     content_modified = pyqtSignal()
-    request_lsp_hover = pyqtSignal(int, int) # line, column
+    request_lsp_hover = pyqtSignal(int, int)
+    go_to_definition_requested = pyqtSignal(str, int, int)
     breakpoint_toggled = pyqtSignal(int)
 
     def __init__(self, parent=None):
@@ -345,13 +346,18 @@ class CodeEditor(QPlainTextEdit):
         self.cursorPositionChanged.connect(self._highlight_current_line)
         self.textChanged.connect(self._on_text_changed)
 
+        self._lsp_timer = QTimer(self)
+        self._lsp_timer.setSingleShot(True)
+        self._lsp_timer.setInterval(300)
+        self._lsp_timer.timeout.connect(self._sync_lsp)
+
         self.breakpoints = set()
         self.execution_line = -1
         self.coverage_data = {} # {line_no: status}
         self._update_line_width()
 
-    def set_lsp_manager(self, manager, filepath):
-        self._lsp_manager = manager
+    def set_lsp_manager(self, manager, filepath, enabled=True):
+        self._lsp_manager = manager if enabled else None
         self._filepath = filepath
         self._lang = self._get_lang_from_ext(filepath)
         if self._lsp_manager and self._lang:
@@ -431,7 +437,7 @@ class CodeEditor(QPlainTextEdit):
         if self.is_modified():
             self.content_modified.emit()
             if self._lsp_manager:
-                self._lsp_timer.start(500) # Debounce 500ms
+                self._lsp_timer.start()
             self.autocomplete.trigger()
 
     def _sync_lsp(self):
@@ -492,6 +498,9 @@ class CodeEditor(QPlainTextEdit):
         self.line_area.setGeometry(cr.left(), cr.top(), self.line_number_width(), cr.height())
 
     def keyPressEvent(self, event):
+        if event.key() == Qt.Key_F12:
+            self._do_go_to_definition()
+            return
         if event.key() == Qt.Key_Tab:
             if self.autocomplete.accept():
                 return
@@ -508,6 +517,38 @@ class CodeEditor(QPlainTextEdit):
                 cursor.insertText(text[4:])
             return
         super().keyPressEvent(event)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and event.modifiers() == Qt.ControlModifier:
+            self._do_go_to_definition()
+            return
+        super().mousePressEvent(event)
+
+    def _do_go_to_definition(self):
+        if not self._lsp_manager or not self._filepath or not self._lang:
+            return
+        cursor = self.textCursor()
+        line = cursor.blockNumber()
+        col = cursor.columnNumber()
+        result = self._lsp_manager.request_definition(self._filepath, self._lang, line, col)
+        if result and isinstance(result, dict) and "result" in result:
+            locs = result.get("result")
+            if isinstance(locs, list) and locs:
+                loc = locs[0]
+            elif isinstance(locs, dict):
+                loc = locs
+            else:
+                return
+            uri = loc.get("uri", "")
+            if uri.startswith("file://"):
+                from urllib.parse import unquote
+                path = unquote(uri[7:])
+                if path.startswith("//"):
+                    path = path[2:]
+                r = loc.get("range", loc)
+                line = r.get("start", r).get("line", 0) + 1
+                col = r.get("start", r).get("character", 0) + 1
+                self.go_to_definition_requested.emit(path, line, col)
 
     def apply_theme(self, theme):
         bg = theme.get("bg", "#1a1b1e")

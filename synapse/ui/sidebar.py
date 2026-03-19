@@ -13,6 +13,11 @@ from ..core.renderer import ChatRenderer
 
 log = logging.getLogger(__name__)
 
+def _expand_hex(c):
+    if len(c) == 4 and c.startswith("#"):
+        return f"#{c[1]*2}{c[2]*2}{c[3]*2}"
+    return c
+
 class TagChip(QPushButton):
     """A small clickable tag chip for the filter bar."""
     clicked_tag = pyqtSignal(str)
@@ -22,11 +27,12 @@ class TagChip(QPushButton):
         self.tag = tag
         self.setCheckable(True)
         self.setCursor(Qt.PointingHandCursor)
+        c = _expand_hex(color)
         self.setStyleSheet(f"""
             QPushButton {{
                 background: #1e1e1e;
-                color: {color};
-                border: 1px solid {color}44;
+                color: {c};
+                border: 1px solid {c}44;
                 border-radius: 10px;
                 padding: 2px 10px;
                 font-size: 10px;
@@ -34,12 +40,12 @@ class TagChip(QPushButton):
             }}
             QPushButton:hover {{
                 background: #2a2a2a;
-                border: 1px solid {color}aa;
+                border: 1px solid {c}aa;
             }}
             QPushButton:checked {{
-                background: {color};
+                background: {c};
                 color: #000;
-                border: 1px solid {color};
+                border: 1px solid {c};
             }}
         """)
         self.clicked.connect(lambda: self.clicked_tag.emit(self.tag))
@@ -47,6 +53,7 @@ class TagChip(QPushButton):
 class SidebarWidget(QWidget):
     conversation_selected = pyqtSignal(str)
     new_chat_requested = pyqtSignal()
+    new_chat_in_folder_requested = pyqtSignal(str)
     fork_requested = pyqtSignal(str)  # conv_id — fork as new branch
 
     def __init__(self, store, parent=None):
@@ -65,7 +72,7 @@ class SidebarWidget(QWidget):
         self.new_btn.setObjectName("newChatBtn")
         self.new_btn.setFixedHeight(40)
         self.new_btn.setCursor(Qt.PointingHandCursor)
-        self.new_btn.clicked.connect(self.new_chat_requested.emit)
+        self.new_btn.clicked.connect(self._on_new_chat_clicked)
         layout.addWidget(self.new_btn)
 
         # Search Bar
@@ -273,6 +280,13 @@ class SidebarWidget(QWidget):
             self.tree.setCurrentItem(item)
             item.parent().setExpanded(True)
 
+    def _on_new_chat_clicked(self):
+        item = self.tree.currentItem()
+        if item and item.data(0, Qt.UserRole) == "folder":
+            self.new_chat_in_folder_requested.emit(item.text(0).title())
+        else:
+            self.new_chat_requested.emit()
+
     def _filter(self, text):
         self.refresh()
 
@@ -303,7 +317,11 @@ class SidebarWidget(QWidget):
         if item.data(0, Qt.UserRole) == "folder":
             f_name = item.text(0).title()
             menu.addAction(f"Folder: {f_name}").setEnabled(False)
-            # Future: Rename/Delete custom folders
+            new_in_folder = menu.addAction(f"New Chat in {f_name}")
+            action = menu.exec_(self.tree.mapToGlobal(pos))
+            if action == new_in_folder:
+                self.new_chat_in_folder_requested.emit(f_name)
+            return
         else:
             conv_id = item.data(0, Qt.UserRole)
             title = item.data(0, Qt.UserRole + 1)

@@ -1,4 +1,5 @@
 import logging
+import os
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTabWidget, QWidget,
     QPushButton, QLabel, QSlider, QSpinBox, QLineEdit,
@@ -31,8 +32,10 @@ class SettingsDialog(QDialog):
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_general_tab(), "General")
         self.tabs.addTab(self._build_model_tab(), "Models")
+        self.tabs.addTab(self._build_privacy_tab(), "Privacy")
         self.tabs.addTab(self._build_appearance_tab(), "Appearance")
         self.tabs.addTab(self._build_advanced_tab(), "Advanced")
+        self.tabs.addTab(self._build_terminal_tab(), "Terminal")
         self.tabs.addTab(self._build_mcp_tab(), "MCP")
         self.tabs.addTab(self._build_providers_tab(), "Providers")
         self.tabs.addTab(self._build_voice_tab(), "Voice")
@@ -67,6 +70,27 @@ class SettingsDialog(QDialog):
         self.auto_summary_check = QCheckBox("Auto-summarize long conversations")
         self.auto_summary_check.setChecked(self.settings_data.get("auto_summary", True))
         layout.addRow(self.auto_summary_check)
+
+        self.smart_context_check = QCheckBox("Smart Context (manage context window intelligently)")
+        self.smart_context_check.setChecked(self.settings_data.get("smart_context", True))
+        layout.addRow(self.smart_context_check)
+
+        deep_gb = QGroupBox("Deep Research")
+        deep_layout = QFormLayout(deep_gb)
+        self.deep_research_check = QCheckBox("Auto-analyze long messages")
+        self.deep_research_check.setChecked(self.settings_data.get("deep_research_enabled", False))
+        deep_layout.addRow(self.deep_research_check)
+        self.deep_research_threshold_spin = QSpinBox()
+        self.deep_research_threshold_spin.setRange(4000, 50000)
+        self.deep_research_threshold_spin.setSingleStep(1000)
+        self.deep_research_threshold_spin.setValue(self.settings_data.get("deep_research_threshold", 8000))
+        deep_layout.addRow("Threshold (chars):", self.deep_research_threshold_spin)
+        self.deep_research_timeout_spin = QSpinBox()
+        self.deep_research_timeout_spin.setRange(30, 300)
+        self.deep_research_timeout_spin.setSingleStep(15)
+        self.deep_research_timeout_spin.setValue(self.settings_data.get("deep_research_timeout", 120))
+        deep_layout.addRow("Timeout (sec):", self.deep_research_timeout_spin)
+        layout.addRow(deep_gb)
 
         self.notification_check = QCheckBox("Sound on completion")
         self.notification_check.setChecked(self.settings_data.get("notification_sound", False))
@@ -130,6 +154,39 @@ class SettingsDialog(QDialog):
         self.ctx_spin.setValue(gen.get("num_ctx", 4096))
         layout.addRow("Context Length:", self.ctx_spin)
 
+        self.summarization_model = QLineEdit(
+            self.settings_data.get("summarization_model", "llama3.2:3b")
+        )
+        self.summarization_model.setPlaceholderText("llama3.2:3b (fast model for summarization)")
+        layout.addRow("Summarization Model:", self.summarization_model)
+
+        self.completion_model = QLineEdit(
+            self.settings_data.get("completion_model", "qwen2.5-coder:1.5b")
+        )
+        self.completion_model.setPlaceholderText("qwen2.5-coder:1.5b")
+        layout.addRow("Completion Model:", self.completion_model)
+
+        router_gb = QGroupBox("Model Router")
+        router_layout = QFormLayout(router_gb)
+        self.router_check = QCheckBox("Enable Router (Auto model selection)")
+        self.router_check.setChecked(self.settings_data.get("model_router_enabled", False))
+        router_layout.addRow(self.router_check)
+        self.fast_model = QLineEdit(self.settings_data.get("fast_model", "llama3.2:1b"))
+        router_layout.addRow("Fast Model:", self.fast_model)
+        self.code_model = QLineEdit(self.settings_data.get("code_model", "qwen2.5-coder:7b"))
+        router_layout.addRow("Code Model:", self.code_model)
+        self.analysis_model = QLineEdit(self.settings_data.get("analysis_model", "llama3.2:3b"))
+        router_layout.addRow("Analysis Model:", self.analysis_model)
+        layout.addRow(router_gb)
+
+        return w
+
+    def _build_privacy_tab(self):
+        w = QWidget()
+        layout = QFormLayout(w)
+        self.privacy_firewall_check = QCheckBox("Enable Privacy Firewall")
+        self.privacy_firewall_check.setChecked(self.settings_data.get("privacy_firewall", False))
+        layout.addRow(self.privacy_firewall_check)
         return w
 
     def _build_appearance_tab(self):
@@ -170,14 +227,39 @@ class SettingsDialog(QDialog):
         self.workspace_dir = QLineEdit(self.settings_data.get("workspace_dir", ""))
         layout.addRow("Workspace Dir:", self.workspace_dir)
 
-        self.privacy_firewall_check = QCheckBox("Enable Privacy Firewall (Mask PII/API Keys)")
-        self.privacy_firewall_check.setChecked(self.settings_data.get("privacy_firewall", False))
-        layout.addRow(self.privacy_firewall_check)
+        self.debug_mode_check = QCheckBox("Debug Mode (sets log level to DEBUG)")
+        self.debug_mode_check.setChecked(self.settings_data.get("debug_mode", False))
+        layout.addRow(self.debug_mode_check)
+
+        self.lsp_enabled_check = QCheckBox("Enable LSP (Language Server Protocol)")
+        self.lsp_enabled_check.setChecked(self.settings_data.get("lsp_enabled", True))
+        layout.addRow(self.lsp_enabled_check)
+
+        self.format_on_save_check = QCheckBox("Format on save (when LSP supports it)")
+        self.format_on_save_check.setChecked(self.settings_data.get("format_on_save", False))
+        layout.addRow(self.format_on_save_check)
 
         info = QLabel("Changes take effect after restart for some settings.")
         info.setStyleSheet("color: #8b949e; font-size: 11px;")
         layout.addRow(info)
 
+        return w
+
+    def _build_terminal_tab(self):
+        w = QWidget()
+        layout = QFormLayout(w)
+        self.terminal_shell = QLineEdit(self.settings_data.get("terminal_shell", os.environ.get("SHELL", "/bin/bash")))
+        self.terminal_shell.setPlaceholderText("/bin/bash")
+        layout.addRow("Shell:", self.terminal_shell)
+        self.terminal_font_size = QSpinBox()
+        self.terminal_font_size.setRange(8, 24)
+        self.terminal_font_size.setValue(self.settings_data.get("terminal_font_size", 10))
+        layout.addRow("Font Size:", self.terminal_font_size)
+        self.terminal_scrollback = QSpinBox()
+        self.terminal_scrollback.setRange(1000, 50000)
+        self.terminal_scrollback.setSingleStep(1000)
+        self.terminal_scrollback.setValue(self.settings_data.get("terminal_scrollback", 10000))
+        layout.addRow("Scrollback (lines):", self.terminal_scrollback)
         return w
 
     def _build_providers_tab(self):
@@ -579,12 +661,22 @@ class SettingsDialog(QDialog):
         form_layout.addRow("Whisper Model:", self.whisper_model_combo)
         
         self.tts_voice_combo = QComboBox()
-        # Common edge-tts voices
         voices = ["en-US-AndrewNeural", "en-US-AvaNeural", "en-GB-SoniaNeural", "en-AU-NatashaNeural"]
         self.tts_voice_combo.addItems(voices)
         current_voice = voice_settings.get("tts_voice", "en-US-AndrewNeural")
         self.tts_voice_combo.setCurrentText(str(current_voice))
         form_layout.addRow("TTS Voice:", self.tts_voice_combo)
+
+        self.tts_engine_combo = QComboBox()
+        self.tts_engine_combo.addItems(["edge", "espeak"])
+        self.tts_engine_combo.setCurrentText(voice_settings.get("tts_engine", "edge"))
+        form_layout.addRow("TTS Engine:", self.tts_engine_combo)
+
+        self.tts_speed_spin = QDoubleSpinBox()
+        self.tts_speed_spin.setRange(0.5, 2.0)
+        self.tts_speed_spin.setSingleStep(0.1)
+        self.tts_speed_spin.setValue(float(voice_settings.get("tts_speed", 1.0)))
+        form_layout.addRow("TTS Speed:", self.tts_speed_spin)
         
         self.vad_threshold_spin = QSpinBox()
         self.vad_threshold_spin.setRange(1, 100)
@@ -687,12 +779,29 @@ class SettingsDialog(QDialog):
             "top_p": self.top_p_slider.value() / 100,
             "num_ctx": self.ctx_spin.value(),
         }
+        self.settings_data["summarization_model"] = (
+            self.summarization_model.text().strip() or "llama3.2:3b"
+        )
         self.settings_data["theme"] = self.theme_combo.currentText()
         self.settings_data["font_size"] = self.font_size_spin.value()
         self.settings_data["editor_font_size"] = self.editor_font_spin.value()
         self.settings_data["zoom"] = self.zoom_spin.value()
         self.settings_data["workspace_dir"] = self.workspace_dir.text().strip()
-        self.settings_data["privacy_firewall"] = self.privacy_firewall_check.isChecked()
+        if hasattr(self, "terminal_shell"):
+            self.settings_data["terminal_shell"] = self.terminal_shell.text().strip() or os.environ.get("SHELL", "/bin/bash")
+        if hasattr(self, "terminal_font_size"):
+            self.settings_data["terminal_font_size"] = self.terminal_font_size.value()
+        if hasattr(self, "terminal_scrollback"):
+            self.settings_data["terminal_scrollback"] = self.terminal_scrollback.value()
+        self.settings_data["privacy_firewall"] = self.privacy_firewall_check.isChecked() if hasattr(self, "privacy_firewall_check") else False
+        self.settings_data["debug_mode"] = getattr(self, "debug_mode_check", None) and self.debug_mode_check.isChecked()
+        self.settings_data["lsp_enabled"] = getattr(self, "lsp_enabled_check", None) and self.lsp_enabled_check.isChecked()
+        self.settings_data["format_on_save"] = getattr(self, "format_on_save_check", None) and self.format_on_save_check.isChecked()
+        self.settings_data["completion_model"] = getattr(self, "completion_model", None) and self.completion_model.text().strip() or "qwen2.5-coder:1.5b"
+        self.settings_data["model_router_enabled"] = getattr(self, "router_check", None) and self.router_check.isChecked()
+        self.settings_data["fast_model"] = getattr(self, "fast_model", None) and self.fast_model.text().strip() or "llama3.2:1b"
+        self.settings_data["code_model"] = getattr(self, "code_model", None) and self.code_model.text().strip() or "qwen2.5-coder:7b"
+        self.settings_data["analysis_model"] = getattr(self, "analysis_model", None) and self.analysis_model.text().strip() or "llama3.2:3b"
         self.settings_data["mcp_servers"] = self._mcp_servers
 
         self.settings_data["openai_key"] = self.openai_key.text().strip()
@@ -711,11 +820,17 @@ class SettingsDialog(QDialog):
         self.settings_data["voice"] = {
             "whisper_model": self.whisper_model_combo.currentText(),
             "tts_voice": self.tts_voice_combo.currentText(),
+            "tts_engine": self.tts_engine_combo.currentText(),
+            "tts_speed": self.tts_speed_spin.value(),
             "vad_threshold": self.vad_threshold_spin.value() / 1000.0,
             "silence_timeout": self.silence_timeout_spin.value() / 10.0,
         }
 
         self.settings_data["auto_summary"] = self.auto_summary_check.isChecked()
+        self.settings_data["smart_context"] = self.smart_context_check.isChecked()
+        self.settings_data["deep_research_enabled"] = self.deep_research_check.isChecked()
+        self.settings_data["deep_research_threshold"] = self.deep_research_threshold_spin.value()
+        self.settings_data["deep_research_timeout"] = self.deep_research_timeout_spin.value()
 
         save_settings(self.settings_data)
         self.settings_changed.emit(self.settings_data)

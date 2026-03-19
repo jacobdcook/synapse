@@ -66,7 +66,8 @@ class ConversationStore:
             return
         preview = ""
         for m in msgs[:3]:
-            preview += m.get("content", "")[:200] + " "
+            c = m.get("content", "")
+            preview += (c if isinstance(c, str) else str(c))[:200] + " "
         tags_json = json.dumps(conv.get("tags", []))
         self._db.execute("""
             INSERT OR REPLACE INTO conversations (id, title, model, folder, tags, pinned, updated_at, message_count, preview)
@@ -85,8 +86,8 @@ class ConversationStore:
         try:
             self._db.execute("INSERT OR REPLACE INTO conv_fts(id, title, tags, preview) VALUES (?, ?, ?, ?)",
                              (conv["id"], conv.get("title", ""), " ".join(conv.get("tags", [])), preview.strip()[:500]))
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"FTS index update failed: {e}")
 
     def list_conversations(self):
         try:
@@ -137,8 +138,8 @@ class ConversationStore:
         path = CONV_DIR / f"{conv_id}.json"
         if path.exists():
             try:
-                with open(path, encoding="utf-8") as f:
-                    return json.load(f)
+                conv = json.load(open(path, encoding="utf-8"))
+                return _ensure_branch_schema(conv)
             except (json.JSONDecodeError, UnicodeDecodeError) as e:
                 log.error(f"Corrupted conversation file {conv_id}: {e}")
         return None
@@ -156,11 +157,16 @@ class ConversationStore:
 
             existing_ids = {m.get("id") for m in conversation["history"]}
             last_id = None
+            branch_id = conversation.get("current_branch", "main")
             for msg in conversation["messages"]:
                 if "id" not in msg:
                     msg["id"] = str(uuid.uuid4())
                 if "parent_id" not in msg:
                     msg["parent_id"] = last_id
+                if "branch_id" not in msg:
+                    msg["branch_id"] = branch_id
+                if branch_id in conversation.get("branches", {}):
+                    conversation["branches"][branch_id]["head_id"] = msg["id"]
 
                 content = str(msg.get("content", ""))
                 total_tokens += len(content.split()) * 1.5 + 20
@@ -243,7 +249,8 @@ class ConversationStore:
             full = self.load(c["id"])
             if full:
                 for msg in full.get("messages", []):
-                    if query_lower in msg.get("content", "").lower():
+                    c = msg.get("content", "")
+                    if query_lower in (c if isinstance(c, str) else str(c)).lower():
                         results.append(c)
                         break
         return results
@@ -268,6 +275,84 @@ class ConversationStore:
                 return True
         return False
 
+    def create_branch(self, conv_id, from_msg_id, branch_name=None):
+        conv = self.load(conv_id)
+        if not conv:
+            return None
+        conv = _ensure_branch_schema(conv)
+        branch_id = str(uuid.uuid4())
+        name = branch_name or f"Branch {len(conv['branches'])}"
+        conv["branches"][branch_id] = {"name": name, "from_msg_id": from_msg_id, "head_id": from_msg_id}
+        self.save(conv)
+        return branch_id
+
+    def get_branches(self, conv_id):
+        conv = self.load(conv_id)
+        if not conv:
+            return []
+        conv = _ensure_branch_schema(conv)
+        return [{"id": bid, "name": b["name"], "from_msg_id": b["from_msg_id"], "head_id": b.get("head_id")}
+                for bid, b in conv["branches"].items()]
+
+    def get_branch_messages(self, conv_id, branch_id):
+        conv = self.load(conv_id)
+        if not conv:
+            return []
+        conv = _ensure_branch_schema(conv)
+        history = {m["id"]: m for m in conv.get("history", [])}
+        branch = conv["branches"].get(branch_id)
+        if not branch:
+            return []
+        head_id = branch.get("head_id")
+        if not head_id:
+            msgs = conv.get("messages", [])
+            return [m for m in msgs if m.get("branch_id", "main") == branch_id or branch_id == "main"]
+        path = []
+        cur = head_id
+        while cur and cur in history:
+            path.append(history[cur])
+            cur = history[cur].get("parent_id")
+        path.reverse()
+        return path
+
+    def merge_branch(self, conv_id, source_branch_id, target_branch_id):
+        conv = self.load(conv_id)
+        if not conv or source_branch_id not in conv.get("branches", {}) or target_branch_id not in conv.get("branches", {}):
+            return False
+        src_msgs = self.get_branch_messages(conv_id, source_branch_id)
+        if not src_msgs:
+            return True
+        last = src_msgs[-1]
+        conv["branches"][target_branch_id]["head_id"] = last["id"]
+        for m in conv.get("history", []):
+            if m["id"] == last["id"]:
+                m["branch_id"] = target_branch_id
+                break
+        if source_branch_id != "main":
+            del conv["branches"][source_branch_id]
+        self.save(conv)
+        return True
+
+    def delete_branch(self, conv_id, branch_id):
+        conv = self.load(conv_id)
+        if not conv or branch_id == "main":
+            return False
+        if branch_id in conv.get("branches", {}):
+            del conv["branches"][branch_id]
+            if conv.get("current_branch") == branch_id:
+                conv["current_branch"] = "main"
+            self.save(conv)
+            return True
+        return False
+
+    def set_branch_head(self, conv_id, branch_id, head_msg_id):
+        conv = self.load(conv_id)
+        if not conv or branch_id not in conv.get("branches", {}):
+            return False
+        conv["branches"][branch_id]["head_id"] = head_msg_id
+        self.save(conv)
+        return True
+
 
 def new_conversation(model=DEFAULT_MODEL, system_prompt=DEFAULT_SYSTEM_PROMPT):
     return {
@@ -279,7 +364,20 @@ def new_conversation(model=DEFAULT_MODEL, system_prompt=DEFAULT_SYSTEM_PROMPT):
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "messages": [],
         "history": [],
+        "branches": {"main": {"name": "Main", "from_msg_id": None, "head_id": None}},
+        "current_branch": "main",
         "pinned": False,
         "folder": "General",
         "tags": [],
     }
+
+
+def _ensure_branch_schema(conv):
+    if "branches" not in conv:
+        conv["branches"] = {"main": {"name": "Main", "from_msg_id": None, "head_id": None}}
+    if "current_branch" not in conv:
+        conv["current_branch"] = "main"
+    for m in conv.get("history", []) + conv.get("messages", []):
+        if "branch_id" not in m:
+            m["branch_id"] = "main"
+    return conv

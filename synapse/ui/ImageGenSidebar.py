@@ -111,6 +111,16 @@ class ImageGenSidebar(QWidget):
         self.prompt_input.setStyleSheet("background: #0d1117; border: 1px solid #30363d; padding: 5px;")
         settings_layout.addWidget(self.prompt_input)
 
+        # Preset
+        preset_row = QHBoxLayout()
+        preset_row.addWidget(QLabel("Preset:"))
+        self.preset_combo = QComboBox()
+        self.preset_combo.addItem("(default)", "")
+        for name in ["Photorealistic", "Artistic", "Fast Draft", "Anime"]:
+            self.preset_combo.addItem(name, name)
+        preset_row.addWidget(self.preset_combo)
+        settings_layout.addLayout(preset_row)
+
         # Negative Prompt
         settings_layout.addWidget(QLabel("Negative Prompt:"))
         self.neg_prompt_input = QLineEdit()
@@ -266,11 +276,13 @@ class ImageGenSidebar(QWidget):
     def _on_gen_clicked(self):
         providers = ["hf", "sd", "comfy", "openai"]
         provider = providers[self.provider_combo.currentIndex()]
+        preset = self.preset_combo.currentData() or ""
         params = {
             "prompt": self.prompt_input.text(),
             "negative_prompt": self.neg_prompt_input.text(),
             "steps": self.steps_spin.value(),
-            "cfg_scale": self.cfg_spin.value()
+            "cfg_scale": self.cfg_spin.value(),
+            "preset": preset,
         }
         self.gen_btn.setEnabled(False)
         self.gen_btn.setText("Generating...")

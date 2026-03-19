@@ -232,6 +232,14 @@ def _draw_repl(p, r, c):
     p.drawLine(r.x()+9, r.center().y(), r.x()+4, r.bottom()-6)
     p.drawLine(r.x()+11, r.bottom()-5, r.right()-4, r.bottom()-5)
 
+def _draw_memory(p, r, c):
+    cx, cy = r.center().x(), r.center().y()
+    p.drawEllipse(QPoint(cx-4, cy-4), 3, 3)
+    p.drawEllipse(QPoint(cx+4, cy-4), 3, 3)
+    p.drawEllipse(QPoint(cx, cy+5), 3, 3)
+    p.drawLine(cx-4, cy-1, cx+4, cy-1)
+    p.drawLine(cx-2, cy+2, cx+2, cy+2)
+
 def _draw_extensions(p, r, c):
     # Puzzle piece
     s = 4
@@ -244,6 +252,18 @@ def _draw_extensions(p, r, c):
     # Right nub
     p.drawEllipse(QPoint(r.right()-3, cy), s//2, s//2)
     p.setBrush(Qt.NoBrush)
+
+def _draw_docker(p, r, c):
+    p.drawRect(r.x()+4, r.y()+6, 6, 5)
+    p.drawRect(r.x()+11, r.y()+6, 6, 5)
+    p.drawRect(r.x()+4, r.y()+12, 6, 5)
+    p.drawRect(r.x()+11, r.y()+12, 6, 5)
+
+def _draw_problems(p, r, c):
+    p.drawEllipse(QPoint(r.center().x()-4, r.center().y()-2), 3, 3)
+    p.drawLine(r.center().x()-1, r.center().y()+2, r.center().x()-1, r.bottom()-4)
+    p.drawLine(r.center().x()-1, r.bottom()-4, r.center().x()-4, r.bottom()-4)
+    p.drawLine(r.center().x()-1, r.bottom()-4, r.center().x()+2, r.bottom()-4)
 
 def _draw_settings(p, r, c):
     cx, cy = r.center().x(), r.center().y()
@@ -267,7 +287,9 @@ def _draw_settings(p, r, c):
 # Map names to draw functions
 DRAW_FNS = {
     "explorer": _draw_explorer, "chat": _draw_chat, "models": _draw_models,
+    "problems": _draw_problems, "docker": _draw_docker,
     "plan": _draw_plan, "git": _draw_git, "knowledge": _draw_knowledge,
+    "memory": _draw_memory,
     "templates": _draw_templates, "analytics": _draw_analytics,
     "branch_tree": _draw_branch_tree, "schedules": _draw_schedules,
     "image_gen": _draw_image_gen, "workflows": _draw_workflows,
@@ -284,7 +306,7 @@ ICON_MAP = {
     9: "schedules", 10: "image_gen", 11: "workflows", 12: "bookmarks",
     13: "agent_forge", 14: "marketplace", 15: "delegative",
     16: "fine_tuning", 17: "debugger", 18: "testing", 19: "tasks",
-    22: "repl", 23: "extensions",
+    20: "memory", 21: "docker", 22: "repl", 23: "extensions", 24: "problems",
 }
 
 TOOLTIP_MAP = {
@@ -293,7 +315,7 @@ TOOLTIP_MAP = {
     9: "Schedules", 10: "Image Generation", 11: "Workflows", 12: "Bookmarks",
     13: "Agent Forge", 14: "Marketplace", 15: "Delegative Board",
     16: "Fine-tuning Studio", 17: "Debugger", 18: "Testing", 19: "Tasks",
-    22: "REPL", 23: "Extensions",
+    20: "Episodic Memory", 21: "Docker", 22: "REPL", 23: "Extensions", 24: "Problems",
 }
 
 
@@ -327,7 +349,7 @@ class ActivityBar(QWidget):
         self._fg = "#858585"
         self._accent = "#ffffff"
 
-        for index in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 22, 23]:
+        for index in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]:
             name = ICON_MAP.get(index, "explorer")
             tooltip = TOOLTIP_MAP.get(index, name)
             self._add_action(name, index, tooltip)

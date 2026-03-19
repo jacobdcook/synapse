@@ -1,3 +1,6 @@
+"""Analytics: usage tracking and cost estimation."""
+__all__ = ["AnalyticsManager", "analytics_manager"]
+
 import json
 import logging
 import os
@@ -65,23 +68,45 @@ class AnalyticsManager:
         log.info(f"Logged analytics: {model} ({provider}) - {input_tokens} in, {output_tokens} out")
 
     def get_stats(self):
-        # Basic aggregation for the UI
         total_input = sum(l.get("input_tokens", 0) for l in self.logs)
         total_output = sum(l.get("output_tokens", 0) for l in self.logs)
-        
-        # Group by model
         by_model = {}
         for l in self.logs:
             m = l.get("model", "unknown")
             by_model[m] = by_model.get(m, 0) + l.get("input_tokens", 0) + l.get("output_tokens", 0)
-            
         return {
             "total_input": total_input,
             "total_output": total_output,
             "total_tokens": total_input + total_output,
             "by_model": by_model,
-            "count": len(self.logs)
+            "count": len(self.logs),
         }
+
+    def get_messages_per_day(self, days=30):
+        from collections import defaultdict
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        by_day = defaultdict(int)
+        for l in self.logs:
+            ts = l.get("timestamp", "")
+            if ts:
+                try:
+                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    if dt >= cutoff:
+                        by_day[dt.date().isoformat()] += 1
+                except (ValueError, TypeError):
+                    pass
+        return dict(by_day)
+
+    def estimate_cost(self):
+        from ..utils.constants import MODEL_PRICES
+        total = 0.0
+        for l in self.logs:
+            model = l.get("model", "")
+            prices = MODEL_PRICES.get(model, {})
+            in_p = prices.get("input", 0) or 0
+            out_p = prices.get("output", 0) or 0
+            total += (l.get("input_tokens", 0) / 1e6 * in_p) + (l.get("output_tokens", 0) / 1e6 * out_p)
+        return total
 
 # Global instance
 analytics_manager = AnalyticsManager()

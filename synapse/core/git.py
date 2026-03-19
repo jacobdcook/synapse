@@ -1,9 +1,15 @@
 import subprocess
+import re
 import logging
 from pathlib import Path
+from typing import List, Optional
 from PyQt5.QtCore import QThread, pyqtSignal
 
 log = logging.getLogger(__name__)
+
+DiffHunk = dict
+GraphNode = dict
+BlameLine = dict
 
 
 def is_git_repo(path):
@@ -61,6 +67,189 @@ def git_diff(path, filepath=None):
         return ""
 
 
+def stage_file(path, filepath):
+    try:
+        r = subprocess.run(["git", "add", filepath], cwd=str(path), capture_output=True, text=True, timeout=10)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def unstage_file(path, filepath):
+    try:
+        r = subprocess.run(["git", "reset", "HEAD", "--", filepath], cwd=str(path), capture_output=True, text=True, timeout=10)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def stage_hunk(path, filepath, hunk_header):
+    try:
+        r = subprocess.run(
+            ["git", "apply", "--cached", "--allow-overlap"],
+            input=hunk_header, cwd=str(path), capture_output=True, text=True, timeout=10
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def get_file_diff(path, filepath, staged=False) -> List[DiffHunk]:
+    try:
+        cmd = ["git", "diff", "--no-color"]
+        if staged:
+            cmd.append("--cached")
+        cmd.append("--")
+        cmd.append(filepath)
+        r = subprocess.run(cmd, capture_output=True, text=True, cwd=str(path), timeout=10)
+        if r.returncode != 0:
+            return []
+        return _parse_diff_hunks(r.stdout)
+    except Exception:
+        return []
+
+
+def _parse_diff_hunks(diff_text):
+    hunks = []
+    for m in re.finditer(r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*?)(?=@@|\Z)", diff_text, re.DOTALL):
+        old_start = int(m.group(1))
+        old_count = int(m.group(2) or 1)
+        new_start = int(m.group(3))
+        new_count = int(m.group(4) or 1)
+        body = m.group(5).strip()
+        lines = [ln for ln in body.split("\n") if ln]
+        hunks.append({
+            "old_start": old_start, "old_count": old_count,
+            "new_start": new_start, "new_count": new_count,
+            "lines": lines
+        })
+    return hunks
+
+
+def get_branch_graph(path) -> List[GraphNode]:
+    try:
+        r = subprocess.run(
+            ["git", "log", "--oneline", "--graph", "--decorate", "-20", "--format=%h %s %d"],
+            capture_output=True, text=True, cwd=str(path), timeout=10
+        )
+        if r.returncode != 0:
+            return []
+        nodes = []
+        for line in r.stdout.strip().split("\n"):
+            if not line.strip():
+                continue
+            nodes.append({"text": line.strip(), "hash": line.split()[0] if line.split() else ""})
+        return nodes
+    except Exception:
+        return []
+
+
+def stash_save(path, message=""):
+    try:
+        cmd = ["git", "stash", "push", "-m", message] if message else ["git", "stash", "push"]
+        r = subprocess.run(cmd, capture_output=True, text=True, cwd=str(path), timeout=10)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def stash_pop(path):
+    try:
+        r = subprocess.run(["git", "stash", "pop"], capture_output=True, text=True, cwd=str(path), timeout=10)
+        return r.returncode == 0, r.stdout + r.stderr
+    except Exception as e:
+        return False, str(e)
+
+
+def stash_list(path) -> List[dict]:
+    try:
+        r = subprocess.run(["git", "stash", "list"], capture_output=True, text=True, cwd=str(path), timeout=10)
+        if r.returncode != 0:
+            return []
+        entries = []
+        for line in r.stdout.strip().split("\n"):
+            if not line.strip():
+                continue
+            m = re.match(r"stash@\{(\d+)\}: (.*)", line.strip())
+            ref = m.group(1) if m else "0"
+            msg = m.group(2) if m else line
+            entries.append({"ref": f"stash@{{{ref}}}", "message": msg})
+        return entries
+    except Exception:
+        return []
+
+
+def blame(path, filepath) -> List[BlameLine]:
+    try:
+        r = subprocess.run(
+            ["git", "blame", "-l", "-w", "--line-porcelain", filepath],
+            capture_output=True, text=True, cwd=str(path), timeout=15
+        )
+        if r.returncode != 0:
+            return []
+        lines = []
+        current = {}
+        for line in r.stdout.split("\n"):
+            if line.startswith("\t"):
+                current["content"] = line[1:]
+                lines.append(dict(current))
+                current = {}
+            elif line.startswith("author "):
+                current["author"] = line[7:]
+            elif line.startswith("committer-time "):
+                current["time"] = line[15:]
+            elif line.startswith("summary "):
+                current["summary"] = line[8:]
+        return lines
+    except Exception:
+        return []
+
+
+def git_branches(path):
+    try:
+        r = subprocess.run(["git", "branch", "-a"], capture_output=True, text=True, cwd=str(path), timeout=10)
+        if r.returncode != 0:
+            return []
+        branches = []
+        current = git_branch(path)
+        for line in r.stdout.strip().split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            is_current = line.startswith("*")
+            name = line.lstrip("* ").strip()
+            if name.startswith("remotes/"):
+                continue
+            branches.append({"name": name, "current": name == current})
+        return branches
+    except Exception:
+        return []
+
+
+def git_switch_branch(path, branch_name):
+    try:
+        r = subprocess.run(["git", "checkout", branch_name], capture_output=True, text=True, cwd=str(path), timeout=10)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def git_create_branch(path, branch_name):
+    try:
+        r = subprocess.run(["git", "branch", branch_name], capture_output=True, text=True, cwd=str(path), timeout=10)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def git_delete_branch(path, branch_name):
+    try:
+        r = subprocess.run(["git", "branch", "-d", branch_name], capture_output=True, text=True, cwd=str(path), timeout=10)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
 def git_log(path, count=20):
     try:
         result = subprocess.run(
@@ -91,13 +280,6 @@ def git_commit(path, message, files=None):
     except Exception as e:
         return f"Error: {e}"
 
-
-class GitStatusWorker(QThread):
-    status_ready = pyqtSignal(str, list)  # branch, status_entries
-
-    def __init__(self, workspace_dir):
-        super().__init__()
-        self.workspace_dir = workspace_dir
 
 def git_remote(path):
     try:

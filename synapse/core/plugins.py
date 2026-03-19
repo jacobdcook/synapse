@@ -57,8 +57,43 @@ class PluginManager(QObject):
         except Exception as e:
             log.error(f"Failed to save plugin settings: {e}")
 
+    def register_tools(self, registry):
+        for plugin in self.plugins.values():
+            for t in getattr(plugin, "get_tools", lambda: [])() or []:
+                if isinstance(t, dict) and t.get("name") and callable(t.get("handler")):
+                    name = f"plugin__{t['name'].replace('plugin__', '')}"
+                    registry.register(name, t["handler"], t.get("description", ""), t.get("parameters", {"type": "object"}))
+
+    def dispatch_hook(self, name, **kwargs):
+        result = kwargs
+        for plugin in self.plugins.values():
+            hooks = getattr(plugin, "get_hooks", lambda: {})() or {}
+            fn = hooks.get(name)
+            if callable(fn):
+                try:
+                    r = fn(**result)
+                    if r is not None and name == "on_message_send":
+                        result = {"text": r}
+                except Exception as e:
+                    log.warning(f"Plugin hook {name} failed: {e}")
+        return result.get("text", result) if isinstance(result, dict) else result
+
     def discover_plugins(self):
-        """Scan the plugin directory for .py files."""
+        for name in ["word_count", "timestamp"]:
+            try:
+                spec = importlib.util.find_spec(f"synapse.plugins.{name}")
+                if spec and spec.loader:
+                    mod = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(mod)
+                    for attr in dir(mod):
+                        cls = getattr(mod, attr)
+                        if isinstance(cls, type) and issubclass(cls, SynapsePlugin) and cls is not SynapsePlugin:
+                            self.plugins[name] = cls(self.api)
+                            self.plugins[name].activate()
+                            break
+            except Exception as e:
+                log.warning(f"Built-in plugin {name}: {e}")
+
         if not os.path.exists(self.plugin_dir):
             return
 
@@ -172,3 +207,35 @@ class PluginManager(QObject):
 
     def get_active_plugins(self) -> List[SynapsePlugin]:
         return list(self.plugins.values())
+
+    def execute_tool(self, name: str, args: dict) -> Optional[Any]:
+        want = name.replace("plugin__", "") if name.startswith("plugin__") else name
+        for plugin in self.plugins.values():
+            tools = getattr(plugin, "get_tools", lambda: [])()
+            if isinstance(tools, list):
+                for t in tools:
+                    tn = t.get("name", "").replace("plugin__", "")
+                    if isinstance(t, dict) and (t.get("name") == name or tn == want):
+                        handler = t.get("handler")
+                        if callable(handler):
+                            try:
+                                return handler(**args)
+                            except Exception as e:
+                                log.warning(f"Plugin tool {name} failed: {e}")
+                                return None
+        return None
+
+    def handle_slash(self, cmd: str, arg: str) -> Optional[str]:
+        for plugin in self.plugins.values():
+            cmds = getattr(plugin, "get_slash_commands", lambda: [])()
+            if isinstance(cmds, list):
+                for c in cmds:
+                    if isinstance(c, dict) and c.get("name") == cmd:
+                        handler = c.get("handler")
+                        if callable(handler):
+                            try:
+                                return handler(arg)
+                            except Exception as e:
+                                log.warning(f"Plugin slash {cmd} failed: {e}")
+                                return None
+        return None

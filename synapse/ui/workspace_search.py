@@ -12,6 +12,40 @@ log = logging.getLogger(__name__)
 
 SKIP_DIRS = {'.git', '__pycache__', 'node_modules', 'venv', '.venv', '.tox', 'dist', 'build'}
 MAX_FILE_SIZE = 1_000_000
+TEXT_EXTENSIONS = ('.py', '.js', '.ts', '.jsx', '.tsx', '.md', '.txt', '.json', '.yaml', '.yml', '.html', '.css', '.sh')
+
+
+def search_workspace_sync(workspace, query, use_regex=False, case_sensitive=False, file_type=None, limit=100):
+    """Synchronous workspace text search. Returns list of (rel_path, line_num, line_text)."""
+    workspace = Path(workspace)
+    if not workspace.exists():
+        return []
+    flags = 0 if case_sensitive else re.IGNORECASE
+    try:
+        pat = re.compile(query if use_regex else re.escape(query), flags)
+    except re.error:
+        return []
+    results = []
+    for root, dirs, files in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+        for fname in files:
+            fpath = Path(root) / fname
+            if file_type and fpath.suffix.lower() != file_type:
+                continue
+            if fpath.suffix.lower() not in TEXT_EXTENSIONS:
+                continue
+            if fpath.stat().st_size > MAX_FILE_SIZE:
+                continue
+            try:
+                for i, line in enumerate(fpath.read_text(errors='replace').splitlines(), 1):
+                    if pat.search(line):
+                        rel = str(fpath.relative_to(workspace))
+                        results.append((rel, i, line.strip()[:300]))
+                        if len(results) >= limit:
+                            return results
+            except (OSError, UnicodeDecodeError):
+                pass
+    return results
 
 
 class SearchWorker(QThread):
@@ -53,8 +87,8 @@ class SearchWorker(QThread):
                                 if self._count >= 500:
                                     self.search_done.emit(self._count)
                                     return
-                except (OSError, UnicodeDecodeError):
-                    pass
+                except (OSError, UnicodeDecodeError) as e:
+                    log.warning(f"Search file read error: {e}")
         self.search_done.emit(self._count)
 
 
@@ -177,8 +211,8 @@ class WorkspaceSearchDialog(QDialog):
                 if n > 0:
                     full_path.write_text(new_content)
                     replaced += n
-            except OSError:
-                pass
+            except OSError as e:
+                log.warning(f"Replace file error: {e}")
 
         self.count_label.setText(f"Replaced {replaced} occurrences in {len(affected_files)} files")
         self._do_search()

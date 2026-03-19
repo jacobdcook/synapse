@@ -1,6 +1,7 @@
 import sys
 import os
 import json
+import html as html_mod
 import time
 import uuid
 import logging
@@ -17,7 +18,7 @@ from PyQt5.QtWidgets import (
     QSystemTrayIcon, QMenu, QAction, QDialog, QTabWidget, QPushButton,
     QGraphicsDropShadowEffect, QStatusBar
 )
-from PyQt5.QtCore import Qt, QTimer, QSettings, pyqtSignal, QPropertyAnimation, QEasingCurve
+from PyQt5.QtCore import Qt, QTimer, QSettings, pyqtSignal, QPropertyAnimation, QEasingCurve, QUrl
 from PyQt5.QtGui import QIcon, QKeySequence, QColor
 
 from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEnginePage
@@ -66,8 +67,10 @@ from ..core.project_rules import ProjectRulesManager
 from .git_panel import GitPanel
 from .workspace_search import WorkspaceSearchDialog
 from .knowledge_sidebar import KnowledgeSidebar
+from .memory_sidebar import MemorySidebar
 from .plan import PlanPanel
-from ..utils.themes import THEMES
+from ..core.episodic_memory import EpisodicMemory
+from ..utils.themes import THEMES, get_all_themes
 from ..utils.hotkey_manager import GlobalHotkeyManager
 from ..core.voice import VoiceManager
 from .onboarding import OnboardingWizard
@@ -75,6 +78,8 @@ from .template_library import TemplateLibrary
 from .analytics_sidebar import AnalyticsSidebar
 from ..core.analytics import analytics_manager
 from .tree_visualizer import ConversationTreeSidebar as BranchTreeSidebar
+from .branch_navigator import BranchNavigator
+from .problems_panel import ProblemsPanel
 from .ScheduleSidebar import ScheduleSidebar
 from ..core.scheduler import scheduler
 from .ImageGenSidebar import ImageGenSidebar
@@ -97,6 +102,8 @@ from .mcp_marketplace import MCPMarketplacePanel
 from ..core.task_manager import TaskManager
 from .task_board import TaskBoardPanel
 from ..core.privacy_filter import PrivacyFilter
+from ..core.privacy_firewall import PrivacyFirewall
+from ..core.privacy_audit import log_mask_event
 from ..core.lora_manager import LoRAManager
 from .fine_tuning import FineTuningPanel
 from ..core.debug_manager import DebugManager
@@ -177,6 +184,7 @@ class MainWindow(QMainWindow):
         # self.tool_executor initialized below
         self.voice_manager = VoiceManager()
         self.voice_manager.transcription_result.connect(self._on_transcription_received)
+        self.voice_manager.voice_command.connect(self._on_voice_command)
         self.voice_manager.error_occurred.connect(lambda msg: self.status_label.setText(msg))
         self.agent_manager = AgentManager()
         self.mcp_manager = MCPClientManager()
@@ -184,6 +192,7 @@ class MainWindow(QMainWindow):
         self.context_manager = ContextManager(self.workspace_root)
         self.lsp_manager = LSPManager(self.workspace_root)
         self.lsp_manager.diagnostics_received.connect(self._on_lsp_diagnostics)
+        self._lsp_diagnostics_cache = {}
         self.semantic_indexer = SemanticIndexer(self.workspace_root)
         self.project_rules = ProjectRulesManager(self.workspace_root)
         self.debug_manager = DebugManager(self.workspace_root)
@@ -193,6 +202,7 @@ class MainWindow(QMainWindow):
         self.docker_manager = DockerManager(self.workspace_root)
         self.notebook_manager = NotebookManager(self.workspace_root)
         self.tool_executor = ToolExecutor(self.workspace_root)
+        self.agent = self.tool_executor
         self.plugin_api = PluginAPI(self)
         self.plugin_manager = PluginManager(self.plugin_api)
         self.plugin_sidebar = PluginSidebar(self.plugin_manager)
@@ -220,7 +230,7 @@ class MainWindow(QMainWindow):
         self._active_stream_conv = None
         self._zen_mode = False
         self._autocomplete_enabled = self.settings_data.get("autocomplete", True)
-        self._current_theme = THEMES.get(self.settings_data.get("theme", "One Dark"), THEMES["One Dark"])
+        self._current_theme = get_all_themes().get(self.settings_data.get("theme", "One Dark"), THEMES["One Dark"])
         
         try:
             unload_all_models()
@@ -229,7 +239,10 @@ class MainWindow(QMainWindow):
         self._setup_ui()
 
         # Post-UI initialization (requires widgets from _setup_ui)
-        QTimer.singleShot(5000, self.plugin_manager.discover_plugins)
+        def _init_plugins():
+            self.plugin_manager.discover_plugins()
+            self.plugin_manager.register_tools(self.tool_executor.registry)
+        QTimer.singleShot(5000, _init_plugins)
         self.notebook_manager.kernel.output_received.connect(self._on_notebook_output)
         self.notebook_manager.kernel.error_received.connect(self._on_notebook_error)
         self.notebook_manager.kernel.finished.connect(self._on_notebook_finished)
@@ -297,6 +310,7 @@ class MainWindow(QMainWindow):
         self.sidebar = SidebarWidget(self.store)
         self.sidebar.conversation_selected.connect(self._load_conversation)
         self.sidebar.new_chat_requested.connect(self._new_chat)
+        self.sidebar.new_chat_in_folder_requested.connect(self._new_chat_in_folder)
         self.sidebar.fork_requested.connect(self._fork_from_sidebar)
         self.sidebar_stack.addWidget(self.sidebar)
 
@@ -309,13 +323,17 @@ class MainWindow(QMainWindow):
         self.sidebar_stack.addWidget(self.plan_panel) # Index 3
 
         self.git_panel = GitPanel()
+        self.git_panel.explain_diff_requested.connect(self._on_explain_diff)
+        self.git_panel.review_changes_requested.connect(self._on_review_changes)
         self.sidebar_stack.addWidget(self.git_panel) # Index 4
 
         self.template_library = TemplateLibrary()
         self.template_library.template_applied.connect(self._on_template_applied)
         self.analytics_sidebar = AnalyticsSidebar()
-        self.knowledge_sidebar = KnowledgeSidebar() # Was missing instantiation?
+        self.knowledge_sidebar = KnowledgeSidebar()
         self.knowledge_sidebar.reindex_requested.connect(self._start_indexing)
+        self.episodic_memory = EpisodicMemory()
+        self.memory_sidebar = MemorySidebar(self.episodic_memory)
         
         self.branch_tree_sidebar = BranchTreeSidebar()
         self.branch_tree_sidebar.branch_requested.connect(self._on_branch_requested)
@@ -414,11 +432,13 @@ class MainWindow(QMainWindow):
         self.debug_manager.breakpoints_updated.connect(self.debug_sidebar.set_breakpoints)
 
         self.privacy_filter = PrivacyFilter(self.settings_data.get("privacy_firewall", False))
+        self.privacy_firewall = PrivacyFirewall(self.settings_data.get("privacy_firewall", False))
 
         # Add knowledge_sidebar, template_library, and analytics_sidebar directly to sidebar_layout
         # and manage their visibility manually, instead of using sidebar_stack
         sidebar_layout.addWidget(self.sidebar_stack)
         sidebar_layout.addWidget(self.knowledge_sidebar)
+        sidebar_layout.addWidget(self.memory_sidebar)
         sidebar_layout.addWidget(self.template_library)
         sidebar_layout.addWidget(self.analytics_sidebar)
         sidebar_layout.addWidget(self.branch_tree_sidebar)
@@ -433,8 +453,12 @@ class MainWindow(QMainWindow):
         sidebar_layout.addWidget(self.debug_sidebar)
         sidebar_layout.addWidget(self.test_sidebar)
         sidebar_layout.addWidget(self.plugin_sidebar)
+        self.problems_panel = ProblemsPanel()
+        self.problems_panel.jump_requested.connect(self._on_problems_jump)
+        sidebar_layout.addWidget(self.problems_panel)
         
         self.knowledge_sidebar.hide()
+        self.memory_sidebar.hide()
         self.template_library.hide()
         self.analytics_sidebar.hide()
         self.branch_tree_sidebar.hide()
@@ -449,6 +473,7 @@ class MainWindow(QMainWindow):
         self.debug_sidebar.hide()
         self.test_sidebar.hide()
         self.plugin_sidebar.hide()
+        self.problems_panel.hide()
 
         self.sidebar_stack.setCurrentIndex(1) # Start with Chat sidebar
 
@@ -528,6 +553,11 @@ class MainWindow(QMainWindow):
         top_layout.addWidget(self.title_label)
         top_layout.addStretch()
 
+        self.branch_navigator = BranchNavigator()
+        self.branch_navigator.branch_changed.connect(self._on_branch_switch)
+        self.branch_navigator.new_branch_requested.connect(self._on_new_branch_requested)
+        top_layout.addWidget(self.branch_navigator)
+
         self.model_combo = QComboBox()
         self.model_combo.setMinimumWidth(200)
         self.model_combo.currentTextChanged.connect(self._on_model_combo_changed)
@@ -571,7 +601,7 @@ class MainWindow(QMainWindow):
 
         theme_btn = QPushButton("Change Theme")
         theme_menu = QMenu(self)
-        for tname in THEMES:
+        for tname in get_all_themes():
             action = theme_menu.addAction(tname)
             action.triggered.connect(lambda checked, n=tname: self._on_theme_changed(n))
         theme_btn.setMenu(theme_menu)
@@ -617,9 +647,11 @@ class MainWindow(QMainWindow):
         self.tool_progress.hide()
         self.status_bar.addPermanentWidget(self.tool_progress)
 
-        self.conn_dot = QLabel("\u25CF") # Circle Icon
-        self.conn_dot.setStyleSheet("color: #f85149; font-size: 14px; padding-right: 4px;")
-        self.conn_dot.setToolTip("Ollama Disconnected")
+        self.conn_dot = ClickableLabel("Ollama: \u25CF")
+        self.conn_dot.setStyleSheet("color: #f85149; font-size: 11px; padding: 0 8px;")
+        self.conn_dot.setCursor(Qt.PointingHandCursor)
+        self.conn_dot.setToolTip("Ollama Disconnected — Click to start")
+        self.conn_dot.clicked.connect(self._toggle_ollama)
         self.status_bar.addPermanentWidget(self.conn_dot)
 
         self.context_prog = QProgressBar()
@@ -635,6 +667,10 @@ class MainWindow(QMainWindow):
         self.git_branch_label = QLabel("")
         self.git_branch_label.setStyleSheet("color: #c678dd; font-size: 11px; padding: 0 10px;")
         self.status_bar.addWidget(self.git_branch_label)
+
+        self.tool_count_label = QLabel("Tools: 0")
+        self.tool_count_label.setStyleSheet("color: #8b949e; font-size: 11px; padding: 0 6px;")
+        self.status_bar.addWidget(self.tool_count_label)
 
         self.mcp_status_label = QLabel("MCP: —")
         self.mcp_status_label.setStyleSheet("color: #8b949e; font-size: 11px; padding: 0 8px;")
@@ -757,15 +793,6 @@ class MainWindow(QMainWindow):
         self._draft_timer.timeout.connect(self._save_draft)
         self._draft_timer.start()
 
-    def _toggle_terminal(self):
-        if self.terminal.isVisible():
-            self.terminal.hide()
-            self.terminal_toggle.setChecked(False)
-        else:
-            self.terminal.show()
-            self.terminal_toggle.setChecked(True)
-            self.terminal.input_line.setFocus()
-
     def _setup_shortcuts(self):
         self._apply_shortcuts()
 
@@ -876,12 +903,12 @@ class MainWindow(QMainWindow):
             self.status_label.setText(f"Executing task with {agent.name}...")
 
     def _on_activity_changed(self, index):
-        # Hide all custom sidebars first
-        for w in (self.knowledge_sidebar, self.template_library, self.analytics_sidebar,
+        for w in (self.knowledge_sidebar, self.memory_sidebar, self.template_library, self.analytics_sidebar,
                   self.branch_tree_sidebar, self.schedule_sidebar, self.image_gen_sidebar,
                   self.workflow_sidebar, self.bookmarks_panel, self.agent_forge, self.mcp_marketplace,
                   self.task_board, self.fine_tuning_panel, self.debug_sidebar, self.test_sidebar,
-                  self.task_runner_sidebar, self.pr_sidebar, self.docker_sidebar, self.plugin_sidebar):
+                  self.task_runner_sidebar, self.pr_sidebar, self.docker_sidebar, self.plugin_sidebar,
+                  self.problems_panel):
             w.hide()
         self.sidebar_stack.show()
 
@@ -967,9 +994,16 @@ class MainWindow(QMainWindow):
             self.sidebar_stack.hide()
             self.fine_tuning_panel.refresh()
             self.fine_tuning_panel.show()
-        elif index == 23: # Extensions
+        elif index == 20:
+            self.sidebar_stack.hide()
+            self.memory_sidebar._refresh()
+            self.memory_sidebar.show()
+        elif index == 23:
             self.sidebar_stack.hide()
             self.plugin_sidebar.show()
+        elif index == 24:
+            self.sidebar_stack.hide()
+            self.problems_panel.show()
         elif index >= 100:
             # Handle Plugin-registered activities
             for plugin in self.plugin_manager.get_active_plugins():
@@ -1039,6 +1073,11 @@ class MainWindow(QMainWindow):
     def _on_file_selected(self, filepath):
         editor = self.editor_tabs.open_file(filepath)
         if editor:
+            if isinstance(editor, CodeEditor):
+                lsp_on = self.settings_data.get("lsp_enabled", True)
+                editor.set_lsp_manager(self.lsp_manager, filepath, enabled=lsp_on)
+                editor.autocomplete.enabled = self._autocomplete_enabled
+                editor.go_to_definition_requested.connect(self._on_problems_jump)
             editor.cursor_changed.connect(self._update_cursor_pos)
             if hasattr(editor, 'breakpoint_toggled'):
                 editor.breakpoint_toggled.connect(self._on_editor_breakpoint_toggled)
@@ -1063,6 +1102,8 @@ class MainWindow(QMainWindow):
             self.voice_manager.silence_timeout = voice_cfg.get("silence_timeout", 1.5)
             self.voice_manager.model_size = voice_cfg.get("whisper_model", "base")
             self.voice_manager.tts_voice = voice_cfg.get("tts_voice", "en-US-AndrewNeural")
+            self.voice_manager.tts_engine = voice_cfg.get("tts_engine", "edge")
+            self.voice_manager.tts_speed = voice_cfg.get("tts_speed", 1.0)
             
             hands_free = self.input_widget._hands_free if hasattr(self.input_widget, "_hands_free") else False
             self.voice_manager.start_recording(hands_free=hands_free)
@@ -1071,6 +1112,21 @@ class MainWindow(QMainWindow):
 
     def _toggle_mic(self):
         self.input_widget.mic_btn.click()
+
+    def _on_voice_command(self, cmd: str):
+        if cmd == "new chat":
+            self._new_chat()
+        elif cmd == "stop":
+            if hasattr(self, "agent_manager") and self.agent_manager and self.agent_manager.is_generating:
+                self.agent_manager.cancel()
+            self.voice_manager.stop_playback()
+        elif cmd == "read that again":
+            conv = self.current_conv
+            if conv and conv.get("messages"):
+                for m in reversed(conv["messages"]):
+                    if m.get("role") == "assistant" and m.get("content"):
+                        self.voice_manager.speak(m["content"])
+                        break
 
     def _on_transcription_received(self, text):
         if not text.strip(): 
@@ -1127,8 +1183,12 @@ class MainWindow(QMainWindow):
         self.input_widget.set_workspace_files(list(index.keys()))
 
     def _new_chat(self):
+        self._new_chat_in_folder("General")
+
+    def _new_chat_in_folder(self, folder: str):
         model = self.model_combo.currentText() or DEFAULT_MODEL
         conv = new_conversation(model)
+        conv["folder"] = folder
         self._add_chat_tab(conv)
 
     def _get_tab_conv(self, tab_index):
@@ -1156,14 +1216,22 @@ class MainWindow(QMainWindow):
 
         self.current_conv = conv
         self.title_label.setText(title)
+        self.branch_navigator.set_conversation(conv)
         self._render_chat(idx)
+        self._update_tool_count()
         self.input_widget.focus_input()
+
+    def _update_tool_count(self):
+        conv = self.current_conv or (self._get_tab_conv(self.chat_tabs.currentIndex()) if self.chat_tabs.currentIndex() >= 0 else None)
+        n = sum(1 for m in ((conv or {}).get("messages", []) or []) if m.get("role") == "tool_results")
+        self.tool_count_label.setText(f"Tools: {n}")
 
     def _load_conversation(self, conv_id):
         for i in range(self.chat_tabs.count()):
             conv = self._get_tab_conv(i)
             if conv and conv.get("id") == conv_id:
                 self.chat_tabs.setCurrentIndex(i)
+                self._update_tool_count()
                 return
 
         # Show loading skeleton while conversation loads
@@ -1194,6 +1262,8 @@ class MainWindow(QMainWindow):
 
         from PyQt5.QtCore import QUrl
         messages = conv.get("messages", [])
+        msg_summary = [(m.get("role"), "str" if isinstance(m.get("content"), str) else type(m.get("content")).__name__, len(m.get("content", "")) if isinstance(m.get("content"), str) else len(m.get("content", [])) if isinstance(m.get("content"), (list, dict)) else 0) for m in messages]
+        log.info("[RENDER] conv=%s msgs=%d summary=%s", conv.get("id", "")[:8], len(messages), msg_summary[-5:] if len(msg_summary) > 5 else msg_summary)
         history = conv.get("history", [])
         
         split_view = tab_widget.findChild(SplitViewWidget)
@@ -1212,17 +1282,24 @@ class MainWindow(QMainWindow):
     def _on_chat_tab_changed(self, index):
         if index < 0: return
         self.current_conv = self._get_tab_conv(index)
+        self._render_chat(index)
         if self.current_conv:
             self.title_label.setText(self.current_conv.get("title", "Untitled"))
+            self.branch_navigator.set_conversation(self.current_conv)
             self.model_combo.blockSignals(True)
             idx = self.model_combo.findText(self.current_conv.get("model", DEFAULT_MODEL))
             if idx >= 0:
                 self.model_combo.setCurrentIndex(idx)
             self.model_combo.blockSignals(False)
-            total_text = "".join([m.get("content", "") for m in self.current_conv.get("messages", [])])
+            parts = []
+            for m in self.current_conv.get("messages", []):
+                c = m.get("content", "")
+                parts.append(c if isinstance(c, str) else "")
+            total_text = "".join(parts)
             tokens = estimate_tokens(total_text)
             max_ctx = self.settings_data.get("gen_params", DEFAULT_GEN_PARAMS).get("num_ctx", 4096)
             self.context_label.setText(f"Context: ~{tokens}/{max_ctx}")
+        self._update_tool_count()
         self.input_widget.focus_input()
 
     def _on_close_chat_tab(self, index):
@@ -1253,7 +1330,7 @@ class MainWindow(QMainWindow):
         QApplication.instance().setStyleSheet(qss)
         self.settings_data["theme"] = theme_name
         save_settings(self.settings_data)
-        theme = THEMES.get(theme_name, THEMES["One Dark"])
+        theme = get_all_themes().get(theme_name, THEMES["One Dark"])
         self._current_theme = theme
         self.title_label.setStyleSheet(f"font-weight: bold; font-size: 16px; color: {theme['accent']}; letter-spacing: 1px;")
         for widget in (
@@ -1341,9 +1418,43 @@ class MainWindow(QMainWindow):
         else:
             self.status_label.setText("Log file not found at " + str(log_path))
 
+    def _open_tool_audit(self):
+        from ..core.tool_audit import ToolAuditLog
+        audit = ToolAuditLog()
+        recent = audit.get_recent(50)
+        stats = audit.get_stats()
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Tool Audit")
+        dlg.resize(700, 500)
+        layout = QVBoxLayout(dlg)
+        stats_text = "=== Stats ===\n"
+        for name, s in stats.items():
+            stats_text += f"{name}: count={s['count']} success={s['success_rate']:.0%} avg_ms={s['avg_duration_ms']:.1f}\n"
+        recent_text = "\n=== Recent (last 50) ===\n"
+        for e in recent:
+            recent_text += f"{e.get('timestamp','')[:19]} | {e.get('tool_name','')} | {e.get('success','')} | {e.get('duration_ms',0):.0f}ms\n"
+        text = QTextEdit()
+        text.setReadOnly(True)
+        text.setFontFamily("monospace")
+        text.setPlainText(stats_text + recent_text)
+        layout.addWidget(text)
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dlg.accept)
+        layout.addWidget(close_btn)
+        dlg.exec_()
+
     def _send_message(self, text, images=None, files=None, bypass_rag=False):
+        if hasattr(self, "plugin_manager"):
+            text = self.plugin_manager.dispatch_hook("on_message_send", text=text) or text
+        force_research = text.strip().lower().startswith("/research")
+        if force_research:
+            text = text.strip()[8:].strip()
         if not self.current_conv:
-            return
+            log.info("No current conv; creating new chat")
+            self._new_chat()
+            if not self.current_conv:
+                log.warning("_new_chat failed to create conversation")
+                return
 
         # PH15: Handle /repl slash command
         if text.startswith("/repl "):
@@ -1362,7 +1473,7 @@ class MainWindow(QMainWindow):
             self._auto_continue_count = 0
 
         # PH3: Resolve @ Mentions context
-        workspace = self.workspace_panel.current_workspace()
+        workspace = self.workspace_panel.get_workspace_dir()
         if workspace:
             self.context_manager.workspace_root = Path(workspace)
             terminal_output = self.terminal.get_recent_output(100)
@@ -1400,13 +1511,37 @@ class MainWindow(QMainWindow):
         if files: msg["files"] = files
         
         conv["messages"].append(msg)
-        self._save_conv(conv)
-        self._refresh_chat_display()
+        if is_agentic:
+            from ..core.message_preprocessor import preprocess_long_message
+            conv["messages"][-1]["content"] = preprocess_long_message(conv["messages"][-1]["content"])
+            threshold = self.settings_data.get("deep_research_threshold", 8000)
+            if self.settings_data.get("deep_research_enabled", False) and (
+                force_research or len(str(conv["messages"][-1]["content"])) > threshold
+            ):
+                from ..core.deep_research import run_deep_research, extract_question
+                content = conv["messages"][-1]["content"]
+                conv["messages"][-1]["content"] = run_deep_research(
+                    content,
+                    extract_question(content),
+                    self.model_combo.currentText() or DEFAULT_MODEL,
+                    self.settings_data.get("ollama_url", ""),
+                    self.settings_data,
+                    timeout=self.settings_data.get("deep_research_timeout", 120),
+                )
+        self.store.save(conv)
+        self.sidebar.refresh(select_id=conv["id"])
+        self._render_chat()
 
         # Prepare tools
-        tools = self.tool_executor.registry.get_tool_definitions()
-        if self.settings_data.get("mcp_enabled", True):
-            tools += self.mcp_manager.get_tool_definitions()
+        if is_agentic:
+            tools = self.tool_executor.registry.get_tool_definitions(
+                ["run_command", "write_file", "read_file", "search_workspace"]
+            )
+        else:
+            tools = self.tool_executor.registry.get_tool_definitions()
+            if self.settings_data.get("mcp_enabled", True):
+                tools += self.mcp_manager.get_tool_definitions()
+        log.info(f"Sending {len(tools)} tools to model")
 
         if is_agentic:
             self._run_agentic(conv, tools, text, images, files)
@@ -1415,22 +1550,41 @@ class MainWindow(QMainWindow):
 
     def _run_agentic(self, conv, tools, text, images, files):
         """Autonomous tool execution loop."""
+        import time as _time
+        _t0 = _time.time()
+        log = logging.getLogger("synapse.ui.main")
+        log.info("[MAIN] _run_agentic started conv_id=%s tools=%d", conv.get("id", ""), len(tools or []))
         gen_params = self.settings_data.get("gen_params", DEFAULT_GEN_PARAMS)
         system_prompt = conv.get("system_prompt", DEFAULT_SYSTEM_PROMPT)
+        system_prompt += "\n\n[AGENTIC MODE] You MUST use tools when the user asks to create/modify files, run commands, or perform actions. Never just describe—execute the tool. CRITICAL: To CREATE or EDIT a file in the workspace, call write_file with path and content. Do NOT use run_command with echo for file creation—use write_file. Use run_command only for: ls, date, wc, grep, or commands that do not create/edit workspace files."
         
         # Inject long-term memory
         memory_context = self.tool_executor.memory.get_context_string()
         if memory_context:
             system_prompt = f"{system_prompt}\n\n{memory_context}"
-            
+        episodic_ctx = self._get_episodic_context(text)
+        if episodic_ctx:
+            system_prompt = f"{system_prompt}\n\n{episodic_ctx}"
         # Inject project-specific rules
         project_instructions = self.project_rules.get_system_instructions()
         if project_instructions:
             system_prompt += project_instructions
 
+        messages_to_send = conv["messages"]
+        if self.settings_data.get("smart_context", True):
+            from ..core.context_manager_v2 import apply_smart_context
+            max_ctx = gen_params.get("num_ctx", 4096)
+            messages_to_send, system_prompt = apply_smart_context(
+                list(conv["messages"]),
+                system_prompt,
+                max_tokens=max_ctx,
+                model=self.model_combo.currentText() or DEFAULT_MODEL,
+                ollama_url=self.settings_data.get("ollama_url"),
+                summarization_model=self.settings_data.get("summarization_model", "llama3.2:3b"),
+            )
         self._agentic_loop = AgenticLoop(
             model=self.model_combo.currentText() or DEFAULT_MODEL,
-            messages=conv["messages"],
+            messages=messages_to_send,
             system_prompt=system_prompt,
             tools=tools,
             agent=self.agent,
@@ -1440,13 +1594,18 @@ class MainWindow(QMainWindow):
         )
         
         # Connect signals
-        self._agentic_loop.token_received.connect(lambda t: self._on_token(t, 0)) # Default to pane 0
+        self._agentic_loop.token_received.connect(lambda t: self._on_token(t, 0))
         self._agentic_loop.tool_executing.connect(self._inject_tool_status)
         self._agentic_loop.tool_result.connect(lambda name, result: self._inject_tool_status(name, {}, status="done"))
+        self._agentic_loop.run_command_output.connect(self._on_run_command_output)
         self._agentic_loop.finished.connect(self._on_agentic_done)
         self._agentic_loop.error_occurred.connect(self._on_worker_error)
+        self._agentic_loop.plan_created.connect(self._on_plan_created)
+        self._agentic_loop.reflection.connect(self._on_reflection)
+        self._agentic_loop.progress.connect(self._on_progress)
         
-        # Initialize streaming display data
+        self._workers = {}
+        self._streaming_data = {}
         self._streaming_data[0] = {
             "text": "",
             "tokens": 0,
@@ -1460,20 +1619,72 @@ class MainWindow(QMainWindow):
         self._active_stream_tab_index = self.chat_tabs.currentIndex()
         self._set_streaming_state(True)
         self._stream_timer.start()
-        
+
+        log.info("[MAIN] AgenticLoop.start() (elapsed=%.1fs)", _time.time() - _t0)
         self._agentic_loop.start()
 
+    def _on_plan_created(self, plan_text):
+        idx = self._active_stream_tab_index if self._active_stream_tab_index >= 0 else self.chat_tabs.currentIndex()
+        if idx >= 0:
+            tab = self.chat_tabs.widget(idx)
+            view = tab.findChild(QWebEngineView) if tab else None
+            if view and plan_text:
+                escaped = plan_text.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n")
+                view.page().runJavaScript(f"if(typeof injectPlan==='function') injectPlan('{escaped}');")
+
+    def _on_reflection(self, text):
+        self.status_label.setText(f"Reflection: {text[:60]}...")
+
+    def _on_progress(self, current, total, desc):
+        self.status_label.setText(f"Step {current}/{total}: {desc[:50]}")
+
+    def _on_run_command_output(self, output):
+        self.terminal.show()
+        self.terminal.append_output(output)
+
     def _on_agentic_done(self, final_text, all_messages, stats):
-        """Called when AgenticLoop finishes its run."""
+        _log = logging.getLogger("synapse.ui.main")
+        _log.info("[MAIN] _on_agentic_done messages=%d stats=%s final_text_len=%d", len(all_messages or []), stats, len(final_text or ""))
+        for i, m in enumerate(all_messages or []):
+            role = m.get("role", "")
+            c = m.get("content", "")
+            ctype = "str" if isinstance(c, str) else type(c).__name__
+            clen = len(c) if isinstance(c, str) else len(str(c))
+            _log.info("[MAIN]   msg[%d] role=%s content_type=%s content_len=%d", i, role, ctype, clen)
         self._set_streaming_state(False)
         self._stream_timer.stop()
-        
+
         if self._active_stream_conv:
-            # Update history with all messages from the loop
+            if all_messages:
+                last = all_messages[-1]
+                if last.get("role") == "assistant" and not (last.get("content") or "").strip():
+                    tool_results = []
+                    for m in all_messages:
+                        if m.get("role") == "tool_results":
+                            for tr in m.get("content") or []:
+                                name = tr.get("name", "")
+                                content = (tr.get("content") or "")[:500]
+                                tool_results.append((name, content))
+                    if tool_results:
+                        summary = "**Tool results:**\n\n" + "\n\n".join(
+                            f"**{name}:**\n{content}" for name, content in tool_results[-5:]
+                        )
+                        all_messages[-1] = {**last, "content": summary}
             self._active_stream_conv["messages"] = all_messages
-            self._save_conv(self._active_stream_conv)
-            self._refresh_chat_display()
-            
+            self.store.save(self._active_stream_conv)
+            self.sidebar.refresh(select_id=self._active_stream_conv["id"])
+            self._render_chat()
+            tools_used = []
+            for m in all_messages:
+                for tc in m.get("tool_calls", []):
+                    tname = tc.get("function", {}).get("name", "")
+                    if tname:
+                        tools_used.append(tname)
+            topic = next((m.get("content", "")[:200] for m in reversed(all_messages) if m.get("role") == "user"), "")
+            self._log_episode(
+                self._active_stream_conv, len(all_messages) - 1, "assistant",
+                topic, final_text[:500] if final_text else "", tools_used
+            )
         self.status_label.setText(f"Agentic Finished. {stats.get('total_duration', '')}")
         log.info(f"Agentic loop finished: {stats}")
 
@@ -1481,10 +1692,13 @@ class MainWindow(QMainWindow):
         """Legacy single-shot generation."""
         self.current_conv = conv
 
-        if text.startswith("/"):
+        if text.startswith("/") and not text.strip().lower().startswith("/research"):
             self._handle_slash_command(text)
             return
 
+        force_research = text.strip().lower().startswith("/research")
+        if force_research:
+            text = text.strip()[8:].strip()
         content = text
 
         # @file mentions: inject file contents
@@ -1508,9 +1722,36 @@ class MainWindow(QMainWindow):
                 log.info("Injected web search results for grounding")
             self.status_label.setText("RAG Ready" if self.workspace_index else "Ready")
 
-        # Apply Privacy Firewall if enabled
         if self.settings_data.get("privacy_firewall", False):
-            content = self.privacy_filter.mask(content)
+            if hasattr(self, "privacy_firewall") and self.privacy_firewall.enabled:
+                content, events = self.privacy_firewall.mask(content)
+                for ev in events:
+                    log_mask_event(ev.rule_name, ev.original_hash, ev.replacement)
+            else:
+                content = self.privacy_filter.mask(content)
+
+        from ..core.message_preprocessor import preprocess_long_message
+        content = preprocess_long_message(content)
+
+        threshold = self.settings_data.get("deep_research_threshold", 8000)
+        if (
+            text
+            and self.settings_data.get("deep_research_enabled", False)
+            and (force_research or len(content) > threshold)
+        ):
+            self.status_label.setText("Deep Research: Analyzing...")
+            QApplication.processEvents()
+            from ..core.deep_research import run_deep_research, extract_question
+            question = extract_question(content)
+            content = run_deep_research(
+                content,
+                question,
+                self.model_combo.currentText() or DEFAULT_MODEL,
+                self.settings_data.get("ollama_url", ""),
+                self.settings_data,
+                timeout=self.settings_data.get("deep_research_timeout", 120),
+            )
+            self.status_label.setText("Ready" if not self.workspace_index else "RAG Ready")
 
         if text: # Don't add empty user messages for tool continuations
             msg = {
@@ -1539,7 +1780,6 @@ class MainWindow(QMainWindow):
         gen_params = self.settings_data.get("gen_params", DEFAULT_GEN_PARAMS)
         tools = (
             self.tool_executor.registry.get_tool_definitions()
-            + self.plugin_manager.get_tool_definitions()
             + self.mcp_manager.get_tool_definitions()
         )
         log.info(f"Sending {len(tools)} tools to model ({len(self.mcp_manager.get_tool_definitions())} from MCP)")
@@ -1592,12 +1832,28 @@ class MainWindow(QMainWindow):
         memory_context = self.tool_executor.memory.get_context_string()
         if memory_context:
             system_prompt = f"{system_prompt}\n\n{memory_context}"
-        # ... (MCP/Tool logic handled above) ...
+        last_user = next((m.get("content", "") for m in reversed(conv["messages"]) if m.get("role") == "user"), "")
+        episodic_ctx = self._get_episodic_context(last_user[:500] if last_user else "")
+        if episodic_ctx:
+            system_prompt = f"{system_prompt}\n\n{episodic_ctx}"
+
+        messages_to_send = conv["messages"]
+        if self.settings_data.get("smart_context", True):
+            from ..core.context_manager_v2 import apply_smart_context
+            max_ctx = gen_params.get("num_ctx", 4096)
+            messages_to_send, system_prompt = apply_smart_context(
+                list(conv["messages"]),
+                system_prompt,
+                max_tokens=max_ctx,
+                model=self.model_combo.currentText() or DEFAULT_MODEL,
+                ollama_url=self.settings_data.get("ollama_url"),
+                summarization_model=self.settings_data.get("summarization_model", "llama3.2:3b"),
+            )
 
         for pane_idx, m_name in targets:
             worker = WorkerFactory(
                 m_name,
-                conv["messages"],
+                messages_to_send,
                 system_prompt,
                 gen_params,
                 tools=tools,
@@ -1626,12 +1882,13 @@ class MainWindow(QMainWindow):
         self._stream_timer.start()
         
         # Update context guess
-        total_text = "".join([m.get("content", "") for m in conv["messages"]])
+        total_text = "".join(m.get("content", "") if isinstance(m.get("content", ""), str) else "" for m in conv["messages"])
         tokens = estimate_tokens(total_text)
         max_ctx = self.settings_data.get("gen_params", DEFAULT_GEN_PARAMS).get("num_ctx", 4096)
         self.context_label.setText(f"Context: ~{tokens}/{max_ctx}")
 
     def _set_streaming_state(self, streaming):
+        log.info("[STREAM] _set_streaming_state streaming=%s", streaming)
         self.input_widget.set_streaming(streaming)
 
     def _inject_tool_status(self, name, args, status="running"):
@@ -1765,7 +2022,7 @@ class MainWindow(QMainWindow):
                 QApplication.processEvents()
 
                 # Three-tier dispatch: built-in, plugin, then MCP
-                res = self.tool_executor.registry.execute(name, args)  # returns None if not found
+                res = self.tool_executor.execute(name, args)  # returns None if not found (includes audit)
 
                 if res is None:
                     res = self.plugin_manager.execute_tool(name, args)  # returns None if not found
@@ -1803,10 +2060,10 @@ class MainWindow(QMainWindow):
                 "role": "tool_results", # Custom role for internal tracking
                 "tool_results": results
             })
-            
+            self._update_tool_count()
             self.tool_progress.hide()
             self.status_label.setText("Processing results...")
-            self._send_message("", bypass_rag=True)
+            self._send_message("Using the tool results above, answer the user's request.", bypass_rag=True)
 
     def _on_token(self, token, pane_index=0):
         if pane_index not in self._streaming_data:
@@ -1818,6 +2075,10 @@ class MainWindow(QMainWindow):
         data["text"] += token
         data["tokens"] += 1
         data["dirty"] = True
+        if data["tokens"] == 1:
+            log.info("[STREAM] first token pane=%d", pane_index)
+        elif data["tokens"] % 100 == 0:
+            log.info("[STREAM] pane=%d tokens=%d text_len=%d", pane_index, data["tokens"], len(data["text"]))
 
     def _update_streaming_display(self):
         idx = self._active_stream_tab_index if self._active_stream_tab_index >= 0 else self.chat_tabs.currentIndex()
@@ -1852,16 +2113,19 @@ class MainWindow(QMainWindow):
                 m_name = split_view.panes[pane_idx].model_combo.currentText() if split_view else self.model_combo.currentText()
                 preview_msgs = list(conv["messages"]) + [{
                     "role": "assistant",
-                    "content": '<pre id="streaming-content" style="white-space:pre-wrap;font-family:inherit;margin:0;background:transparent;border:none;padding:0;"></pre>',
+                    "content": '<span class="thinking-placeholder">Synapse is thinking...</span><pre id="streaming-content" style="white-space:pre-wrap;font-family:inherit;margin:0;background:transparent;border:none;padding:0;"></pre>',
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 }]
                 html = self.renderer.build_html(preview_msgs, conv.get("history", []), model_name=m_name)
-                html = html.replace('&lt;pre id=&quot;streaming-content&quot;', '<pre id="streaming-content"') \
+                html = html.replace('&lt;span class=&quot;thinking-placeholder&quot;&gt;Synapse is thinking...&lt;/span&gt;', '<span class="thinking-placeholder">Synapse is thinking...</span>') \
+                           .replace('&lt;pre id=&quot;streaming-content&quot;', '<pre id="streaming-content"') \
                            .replace('&lt;/pre&gt;', '</pre>')
                 view.setHtml(html, QUrl("qrc:/"))
             else:
                 new_text = data["text"][len(data.get("flushed_text", "")):]
                 if new_text:
+                    if len(new_text) >= 20:
+                        log.info("[STREAM] flush pane=%d chunk_len=%d total=%d", pane_idx, len(new_text), len(data["text"]))
                     escaped = html_mod.escape(new_text).replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n").replace("\r", "")
                     view.page().runJavaScript(f"appendStreamToken('{escaped}');")
                     data["flushed_text"] = data["text"]
@@ -1877,7 +2141,7 @@ class MainWindow(QMainWindow):
         # Use pane 0 as the reference for context estimation/labels
         primary_data = self._streaming_data.get(0, next(iter(self._streaming_data.values())))
         if primary_data.get("tokens", 0) % 50 == 0:
-            total_text = "".join(m.get("content", "") for m in conv["messages"]) + primary_data.get("text", "")
+            total_text = "".join(m.get("content", "") if isinstance(m.get("content", ""), str) else "" for m in conv["messages"]) + primary_data.get("text", "")
             tokens = estimate_tokens(total_text)
             max_ctx = self.settings_data.get("gen_params", DEFAULT_GEN_PARAMS).get("num_ctx", 4096)
             pct = min(100, int(tokens / max_ctx * 100))
@@ -1943,6 +2207,13 @@ class MainWindow(QMainWindow):
         self.store.save(conv)
         self.sidebar.refresh(select_id=conv["id"])
 
+        topic = next((m.get("content", "")[:200] for m in reversed(conv["messages"]) if m.get("role") == "user"), "")
+        self._log_episode(conv, len(conv["messages"]) - 1, "assistant", topic, full_text[:500] if full_text else "")
+
+        if getattr(self, "_active_scheduled_task", None):
+            self._on_scheduled_task_done(self._active_scheduled_task, full_text or "")
+            self._active_scheduled_task = None
+
         # Log analytics
         m_name = model_name or self.model_combo.currentText()
         provider = "Ollama"
@@ -1995,7 +2266,7 @@ class MainWindow(QMainWindow):
         if len(conv.get("messages", [])) >= 10 and not conv.get("summary"):
             self._request_summary(conv)
 
-        total_text = "".join(m.get("content", "") for m in conv["messages"])
+        total_text = "".join(m.get("content", "") if isinstance(m.get("content", ""), str) else "" for m in conv["messages"])
         tokens = estimate_tokens(total_text)
         max_ctx = self.settings_data.get("gen_params", DEFAULT_GEN_PARAMS).get("num_ctx", 4096)
         pct = min(100, int(tokens / max_ctx * 100))
@@ -2003,7 +2274,7 @@ class MainWindow(QMainWindow):
         self.sum_action.setText(f"Summarize ({pct}% Context)")
 
         # Auto-title after first real assistant response (skip empty tool-call-only messages)
-        real_assistant = [m for m in conv["messages"] if m["role"] == "assistant" and m.get("content", "").strip()]
+        real_assistant = [m for m in conv["messages"] if m["role"] == "assistant" and (m.get("content", "") if isinstance(m.get("content"), str) else "").strip()]
         log.debug(f"Auto-title check: {len(real_assistant)} real assistant msgs, title='{conv.get('title')}'")
         if len(real_assistant) >= 1 and conv.get("title") == "New Chat":
             self._auto_title(conv)
@@ -2136,6 +2407,7 @@ class MainWindow(QMainWindow):
             log.debug(f"Tray notification failed: {e}")
 
     def _on_worker_error(self, err_msg):
+        logging.getLogger("synapse.ui.main").warning("[MAIN] _on_worker_error: %s", (err_msg or "")[:300])
         if self._stream_timer.isActive():
             self._stream_timer.stop()
         self.input_widget.set_streaming(False)
@@ -2211,7 +2483,9 @@ class MainWindow(QMainWindow):
         elif cmd == "/terminal":
             if not self.terminal.isVisible():
                 self._toggle_terminal()
-            self.terminal.input_line.setFocus()
+            inp = self.terminal.input_line
+            if inp:
+                inp.setFocus()
             self.status_label.setText("Terminal focused")
         elif cmd == "/diff":
             # Logic to open the diff view for the current active file
@@ -2329,9 +2603,11 @@ class MainWindow(QMainWindow):
         if os.path.exists(abs_path) and os.path.isfile(abs_path):
             editor = self.editor_tabs.open_file(abs_path)
             # Enable LSP for this file
-            if editor:
-                editor.set_lsp_manager(self.lsp_manager, abs_path)
+            if editor and isinstance(editor, CodeEditor):
+                lsp_on = self.settings_data.get("lsp_enabled", True)
+                editor.set_lsp_manager(self.lsp_manager, abs_path, enabled=lsp_on)
                 editor.autocomplete.enabled = self._autocomplete_enabled
+                editor.go_to_definition_requested.connect(self._on_problems_jump)
             
             self.status_bar.showMessage(f"Opened {abs_path}", 3000)
         else:
@@ -2393,6 +2669,38 @@ class MainWindow(QMainWindow):
             text += "\n".join(appended)
         return text
 
+    def _get_episodic_context(self, user_text):
+        if not user_text or not hasattr(self, "episodic_memory"):
+            return ""
+        keywords = " ".join(w for w in user_text.split() if len(w) > 2)[:100]
+        if not keywords:
+            return ""
+        episodes = self.episodic_memory.query_by_topic(keywords, limit=3)
+        if not episodes:
+            return ""
+        parts = []
+        total = 0
+        for e in episodes:
+            s = f"- {e.get('topic', '')[:80]}: {e.get('outcome', '')[:120]}"
+            if total + len(s) > 500:
+                break
+            parts.append(s)
+            total += len(s)
+        if parts:
+            return "[Memory: Relevant past context]\n" + "\n".join(parts)
+        return ""
+
+    def _log_episode(self, conv, turn_idx, role, topic, outcome, tools_used=None):
+        if not hasattr(self, "episodic_memory"):
+            return
+        try:
+            self.episodic_memory.log_episode(
+                conv.get("id", ""), turn_idx, role, topic[:500],
+                outcome=outcome[:2000], tools_used=tools_used or []
+            )
+        except Exception as e:
+            log.warning(f"Episodic log failed: {e}")
+
     def _search_workspace(self, query):
         if not self.workspace_index:
             return []
@@ -2428,13 +2736,13 @@ class MainWindow(QMainWindow):
             try:
                 code_idx = int(parts[0])
                 filename = parts[1] if len(parts) > 1 else None
-            except:
-                pass
+            except Exception as e:
+                log.warning(f"Parse index_or_data: {e}")
         else:
             try:
                 code_idx = int(index_or_data)
-            except:
-                pass
+            except Exception as e:
+                log.warning(f"Parse index_or_data: {e}")
 
         if action == "applycode" or action == "proposecode":
             self._propose_code_block(code_idx, auto_apply=(action == "applycode"), forced_filename=filename)
@@ -2442,25 +2750,27 @@ class MainWindow(QMainWindow):
             self._propose_code_block(code_idx, auto_apply=True, forced_filename=filename)
         elif action == "runcode":
             self._run_code_block(code_idx)
+        elif action == "runinterminal":
+            self._run_code_in_terminal(code_idx)
         elif action == "copy":
-            if 0 <= index < len(self.current_conv["messages"]):
-                msg = self.current_conv["messages"][index]
+            if 0 <= code_idx < len(self.current_conv["messages"]):
+                msg = self.current_conv["messages"][code_idx]
                 QApplication.clipboard().setText(msg.get("content", ""))
                 self.status_label.setText("Copied to clipboard")
         elif action == "edit":
-            self._edit_message(index)
+            self._edit_message(code_idx)
         elif action == "regenerate":
-            self._regenerate(index)
+            self._regenerate(code_idx)
         elif action == "retrywith":
-            self._retry_with_model(index)
+            self._retry_with_model(code_idx)
         elif action == "bookmark":
-            self._toggle_bookmark(index)
+            self._toggle_bookmark(code_idx)
         elif action == "continue":
             self._continue_generation()
         elif action == "fork":
-            self._fork_conversation(index)
+            self._fork_conversation(code_idx)
         elif action == "previewartifact":
-            self._preview_artifact(index)
+            self._preview_artifact(code_idx)
         elif action == "feedback":
             try:
                 parts = str(index).split("/")
@@ -2564,6 +2874,28 @@ class MainWindow(QMainWindow):
                 self.status_label.setText(f"Run failed: {e}")
         else:
             self.status_label.setText(f"Cannot run {lang} code blocks")
+
+    def _run_code_in_terminal(self, code_block_index):
+        all_blocks = self._get_code_blocks()
+        if code_block_index < 0 or code_block_index >= len(all_blocks):
+            self.status_label.setText("Code block not found")
+            return
+        lang, code = all_blocks[code_block_index]
+        lang_lower = lang.lower()
+        if lang_lower in ('python', 'python3', 'py'):
+            import tempfile
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+                f.write(code)
+                tmp = f.name
+            cmd = f"python3 {tmp}"
+        elif lang_lower in ('bash', 'sh', 'shell'):
+            cmd = code.strip()
+        else:
+            self.status_label.setText(f"Cannot run {lang} in terminal")
+            return
+        self.terminal.show()
+        self.terminal.run_in_new_tab(cmd, name=f"Run {lang}")
+        self.status_label.setText(f"Running in terminal: {lang}")
 
     def _on_template_applied(self, content):
         self.input_widget.set_text(content)
@@ -2867,9 +3199,14 @@ class MainWindow(QMainWindow):
         self.sidebar_container.setVisible(not self.sidebar_container.isVisible())
 
     def _toggle_terminal(self):
-        self.terminal.setVisible(not self.terminal.isVisible())
-        if self.terminal.isVisible():
-            self.terminal.input_line.setFocus()
+        vis = not self.terminal.isVisible()
+        self.terminal.setVisible(vis)
+        if hasattr(self, 'terminal_toggle'):
+            self.terminal_toggle.setChecked(vis)
+        if vis:
+            inp = self.terminal.input_line
+            if inp:
+                inp.setFocus()
 
     def _save_workspace_file(self):
         self.editor_tabs.save_current()
@@ -2912,6 +3249,7 @@ class MainWindow(QMainWindow):
 
     def _on_workspace_changed(self, path):
         self.workspace_root = path
+        self.lsp_manager.workspace_root = path
         self.terminal.set_cwd(path)
         self.git_panel.set_workspace(path)
         self.settings_data["workspace_dir"] = path
@@ -2922,6 +3260,26 @@ class MainWindow(QMainWindow):
     def _on_git_status_changed(self, branch, count):
         suffix = f" ({count})" if count else ""
         self.git_branch_label.setText(f"\u2387 {branch}{suffix}")
+
+    def _on_explain_diff(self, diff_text):
+        if not diff_text or not diff_text.strip():
+            self.status_label.setText("No diff to explain")
+            return
+        self.central_stack.setCurrentIndex(0)
+        if len(self.activity_bar.buttons) > 1:
+            self.activity_bar.buttons[1].click()
+        prompt = f"Explain this diff concisely:\n\n```diff\n{diff_text[:8000]}\n```"
+        self._send_message(prompt)
+
+    def _on_review_changes(self, staged_diff):
+        if not staged_diff or not staged_diff.strip():
+            self.status_label.setText("No staged changes to review")
+            return
+        self.central_stack.setCurrentIndex(0)
+        if len(self.activity_bar.buttons) > 1:
+            self.activity_bar.buttons[1].click()
+        prompt = f"Review these staged changes and suggest improvements or issues:\n\n```diff\n{staged_diff[:8000]}\n```"
+        self._send_message(prompt)
 
     def _update_mcp_status(self):
         """Update MCP status indicator in status bar."""
@@ -3124,8 +3482,9 @@ class MainWindow(QMainWindow):
             {"id": "streaming_slow", "label": "Streaming Speed: Slow (100ms)", "shortcut": ""},
             {"id": "streaming_typewriter", "label": "Streaming Speed: Typewriter (200ms)", "shortcut": ""},
             {"id": "show_shortcuts", "label": "Show Keyboard Shortcuts", "shortcut": ""},
+            {"id": "tool_audit", "label": "Tool Audit (Recent Calls & Stats)", "shortcut": ""},
         ]
-        for tname in THEMES:
+        for tname in get_all_themes():
             commands.append({"id": f"theme_{tname}", "label": f"Theme: {tname}", "shortcut": ""})
 
         palette = CommandPalette(commands, self)
@@ -3177,8 +3536,9 @@ class MainWindow(QMainWindow):
             "streaming_slow": lambda: self._set_streaming_speed(100),
             "streaming_typewriter": lambda: self._set_streaming_speed(200),
             "show_shortcuts": self._show_shortcuts,
+            "tool_audit": self._open_tool_audit,
         }
-        for tname in THEMES:
+        for tname in get_all_themes():
             dispatch[f"theme_{tname}"] = lambda n=tname: self._on_theme_changed(n)
 
         fn = dispatch.get(cmd_id)
@@ -3389,18 +3749,31 @@ class MainWindow(QMainWindow):
 
     def _on_lsp_diagnostics(self, uri, diagnostics):
         """Routes diagnostics from LSP to the correct editor tab."""
-        # Convert URI back to local path
-        if not uri.startswith("file://"): return
-        path = uri[7:]
-        if os.name == 'nt' and path.startswith('/'):
+        if not uri.startswith("file://"):
+            return
+        from urllib.parse import unquote
+        path = unquote(uri[7:])
+        if os.name == 'nt' and len(path) >= 2 and path[0] == '/' and path[2] == ':':
             path = path[1:]
-        
-        # Find the editor for this path
-        for i in range(self.tabs.count()):
-            editor = self.tabs.widget(i)
-            if hasattr(editor, '_filepath') and editor._filepath == path:
+        path = os.path.normpath(path)
+        for i in range(self.editor_tabs.count()):
+            tab = self.editor_tabs.widget(i)
+            editor = self.editor_tabs._get_editor(i) if hasattr(self.editor_tabs, '_get_editor') else tab.findChild(CodeEditor) if tab else None
+            if editor and hasattr(editor, '_filepath') and editor._filepath and os.path.normpath(editor._filepath) == path:
                 editor.set_diagnostics(diagnostics)
                 break
+        self._lsp_diagnostics_cache[uri] = diagnostics
+        self.problems_panel.add_diagnostics(uri, diagnostics)
+
+    def _on_problems_jump(self, path, line, col):
+        self.central_stack.setCurrentIndex(1)
+        editor = self.editor_tabs.open_file(path)
+        if isinstance(editor, CodeEditor):
+            block = editor.document().findBlockByLineNumber(line - 1)
+            cursor = editor.textCursor()
+            cursor.setPosition(block.position() + min(col - 1, block.length() - 1))
+            editor.setTextCursor(cursor)
+            editor.setFocus()
 
     def closeEvent(self, event):
         if self.current_conv:
@@ -3653,16 +4026,40 @@ class MainWindow(QMainWindow):
     def _on_connection_status_changed(self, online):
         was_offline = getattr(self, '_ollama_was_offline', True)
         if online:
-            self.conn_dot.setStyleSheet("color: #2ea043; font-size: 14px; padding: 0 4px;")
-            self.conn_dot.setToolTip("Ollama Connected")
+            self.conn_dot.setText("Ollama: \u25CF")
+            self.conn_dot.setStyleSheet("color: #2ea043; font-size: 11px; padding: 0 8px;")
+            self.conn_dot.setToolTip("Ollama Running — Click to stop")
             if was_offline:
                 log.info("Ollama came online — refreshing models")
                 self._load_models()
             self._ollama_was_offline = False
         else:
-            self.conn_dot.setStyleSheet("color: #d32f2f; font-size: 14px; padding: 0 4px;")
-            self.conn_dot.setToolTip("Ollama Offline")
+            self.conn_dot.setText("Ollama: \u25CF")
+            self.conn_dot.setStyleSheet("color: #d32f2f; font-size: 11px; padding: 0 8px;")
+            self.conn_dot.setToolTip("Ollama Offline — Click to start")
             self._ollama_was_offline = True
+
+    def _toggle_ollama(self):
+        import subprocess
+        online = not getattr(self, '_ollama_was_offline', True)
+        if online:
+            try:
+                subprocess.Popen(["pkill", "-f", "ollama serve"],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                self.status_label.setText("Stopping Ollama...")
+            except Exception as e:
+                log.error(f"Failed to stop Ollama: {e}")
+        else:
+            try:
+                subprocess.Popen(["ollama", "serve"],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                self.status_label.setText("Starting Ollama...")
+            except FileNotFoundError:
+                from PyQt5.QtWidgets import QMessageBox
+                QMessageBox.warning(self, "Ollama Not Found",
+                    "Ollama is not installed.\n\nInstall from: https://ollama.com/download")
+            except Exception as e:
+                log.error(f"Failed to start Ollama: {e}")
 
     def _on_summary_done(self, summary_text, stats):
         if not self.current_conv:
@@ -3750,21 +4147,47 @@ class MainWindow(QMainWindow):
         else:
             self.status_label.setText("Ready")
 
+    def _on_branch_switch(self, branch_id):
+        if not self.current_conv:
+            return
+        self.current_conv["current_branch"] = branch_id
+        msgs = self.store.get_branch_messages(self.current_conv["id"], branch_id)
+        self.current_conv["messages"] = msgs
+        self.store.save(self.current_conv)
+        self._render_chat()
+        self.branch_navigator.set_conversation(self.current_conv)
+        branches = self.store.get_branches(self.current_conv["id"])
+        bn = next((b["name"] for b in branches if b["id"] == branch_id), branch_id)
+        self.status_label.setText(f"Switched to: {bn}")
+
+    def _on_new_branch_requested(self, name):
+        if not self.current_conv or not self.current_conv.get("messages"):
+            return
+        last_msg = self.current_conv["messages"][-1]
+        from_msg_id = last_msg.get("id")
+        branch_id = self.store.create_branch(self.current_conv["id"], from_msg_id, name)
+        if branch_id:
+            self.current_conv["current_branch"] = branch_id
+            self.current_conv["messages"] = self.store.get_branch_messages(self.current_conv["id"], branch_id)
+            self.store.save(self.current_conv)
+            self.branch_navigator.set_conversation(self.current_conv)
+            self._render_chat()
+            self.status_label.setText(f"Created branch: {name}")
+
     def _on_branch_requested(self, msg_id):
         if not self.current_conv or "history" not in self.current_conv:
             return
-            
+
         history = self.current_conv["history"]
-        # Reconstruct path from msg_id upwards
         new_messages = []
         curr_id = msg_id
-        
+
         while curr_id:
             msg = next((m for m in history if m.get("id") == curr_id), None)
             if not msg: break
             new_messages.insert(0, msg)
             curr_id = msg.get("parent_id")
-            
+
         self.current_conv["messages"] = new_messages
         self.store.save(self.current_conv)
         self._render_chat()
@@ -3773,22 +4196,17 @@ class MainWindow(QMainWindow):
     def _on_scheduled_task(self, task):
         log.info(f"Scheduled task executing: {task['id']}")
         self.status_label.setText(f"Running task: {task['prompt'][:30]}...")
-
-        model = task.get("model", self.model_combo.currentText() or DEFAULT_MODEL)
-        messages = [{"role": "user", "content": task["prompt"]}]
-        gen_params = self.settings_data.get("gen_params", DEFAULT_GEN_PARAMS)
-
-        worker = WorkerFactory(
-            model, messages, "",
-            gen_params, self.settings_data, tools=[]
-        )
-        worker.response_finished.connect(
-            lambda text, stats, t=task: self._on_scheduled_task_done(t, text)
-        )
-        worker.error_occurred.connect(
-            lambda err, t=task: self._on_scheduled_task_done(t, f"Error: {err}")
-        )
-        worker.start()
+        from ..utils.constants import new_conversation
+        conv = new_conversation(task.get("model", self.model_combo.currentText() or DEFAULT_MODEL))
+        conv["title"] = f"Task: {task['prompt'][:50]}"
+        conv["messages"] = [{"role": "user", "content": task["prompt"]}]
+        self.store.save(conv)
+        self._add_chat_tab(conv)
+        self._active_scheduled_task = task
+        tools = self.tool_executor.registry.get_tool_definitions()
+        if self.settings_data.get("mcp_enabled", True):
+            tools += self.mcp_manager.get_tool_definitions()
+        self._start_generation(conv, tools, "", None, None, bypass_rag=True)
 
     def _on_scheduled_task_done(self, task, result):
         task["status"] = "finished"
@@ -4036,7 +4454,7 @@ class MainWindow(QMainWindow):
         if not self.current_conv or not self.current_conv.get("messages"):
             return
         msgs = self.current_conv["messages"][:4]
-        preview = "\n".join(f"{m['role']}: {m['content'][:200]}" for m in msgs)
+        preview = "\n".join(f"{m['role']}: {(c[:200] if isinstance(c := m.get('content'), str) else '[tool]')}" for m in msgs)
         tag_prompt = (
             "Classify this conversation into 1-2 tags from this list: "
             "coding, writing, research, math, data, debugging, learning, creative, general. "
@@ -4045,7 +4463,7 @@ class MainWindow(QMainWindow):
         )
         model = self.model_combo.currentText() or DEFAULT_MODEL
         messages = [{"role": "user", "content": tag_prompt}]
-        worker = WorkerFactory(model, messages, "", DEFAULT_GEN_PARAMS, self.settings_data, tools=[])
+        worker = WorkerFactory(model, messages, "", DEFAULT_GEN_PARAMS, tools=[], settings=self.settings_data)
         worker.response_finished.connect(self._on_auto_tag_done)
         worker.error_occurred.connect(lambda e: self.status_label.setText(f"Auto-tag failed: {e}"))
         worker.start()
