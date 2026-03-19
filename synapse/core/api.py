@@ -6,7 +6,7 @@ import urllib.error
 import logging
 import time
 from PyQt5.QtCore import QThread, pyqtSignal
-from ..utils.constants import get_ollama_url
+from ..utils.constants import get_ollama_url, save_settings
 
 log = logging.getLogger(__name__)
 
@@ -222,12 +222,28 @@ class OllamaWorker(BaseAIWorker):
             keys.add(self.model[:-7])
         return keys
 
+    def _is_tools_unsupported(self):
+        persisted = set(self.settings.get("ollama_models_without_tools", []) or [])
+        return any(k in self._models_without_tool_support or k in persisted for k in self._model_keys())
+
+    def _persist_tools_unsupported(self):
+        for k in self._model_keys():
+            self._models_without_tool_support.add(k)
+        try:
+            current = set(self.settings.get("ollama_models_without_tools", []) or [])
+            updated = sorted(current.union(self._model_keys()))
+            if updated != sorted(current):
+                self.settings["ollama_models_without_tools"] = updated
+                save_settings(self.settings)
+        except Exception as se:
+            log.debug(f"Failed to persist no-tools model cache: {se}")
+
     def run(self):
         _t0 = time.time()
         try_tools = (
             isinstance(self.tools, list)
             and len(self.tools) > 0
-            and not any(k in self._models_without_tool_support for k in self._model_keys())
+            and not self._is_tools_unsupported()
         )
         log.info("[OLLAMA] run() started model=%s use_tools=%s messages=%d tools=%d", self.model, try_tools, len(self.messages), len(self.tools or []))
         retried_after_unload = False
@@ -237,8 +253,7 @@ class OllamaWorker(BaseAIWorker):
         except Exception as e:
             err_text = str(e)
             if try_tools and ("does not support tools" in err_text.lower() or "400" in err_text):
-                for k in self._model_keys():
-                    self._models_without_tool_support.add(k)
+                self._persist_tools_unsupported()
                 log.warning(f"Model '{self.model}' does not support tools; retrying without tools")
                 try:
                     self._execute_request(use_tools=False)

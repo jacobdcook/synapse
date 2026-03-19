@@ -226,7 +226,7 @@ class MainWindow(QMainWindow):
         self._shortcut_objects = []
         self._consensus_active = False
         self._consensus_responses = {}
-        self._rag_enabled = False
+        self._rag_enabled = True
         self._active_stream_conv = None
         self._zen_mode = False
         self._autocomplete_enabled = self.settings_data.get("autocomplete", True)
@@ -1586,7 +1586,7 @@ class MainWindow(QMainWindow):
             from ..core.context_manager_v2 import apply_smart_context
             max_ctx = gen_params.get("num_ctx", 4096)
             messages_to_send, system_prompt = apply_smart_context(
-                list(conv["messages"]),
+                list(messages_to_send),
                 system_prompt,
                 max_tokens=max_ctx,
                 model=self.model_combo.currentText() or DEFAULT_MODEL,
@@ -1725,9 +1725,11 @@ class MainWindow(QMainWindow):
         if content:
             content = self._expand_file_mentions(content)
 
-        # RAG: Search workspace for context mapping to the query
-        if not bypass_rag and text:
-            context_snippets = self._search_workspace(text)
+        # RAG: only inject workspace context for workspace/code-oriented prompts.
+        # For very large prompts, skip synchronous retrieval to avoid UI stalls.
+        if not bypass_rag and text and self._rag_enabled and self._should_use_workspace_context(text):
+            search_query = text[:1200]
+            context_snippets = self._search_workspace(search_query)
             if context_snippets:
                 context_header = "\n\n---\nRelevant Workspace Context:\n"
                 content += context_header + "\n".join(context_snippets)
@@ -1772,15 +1774,6 @@ class MainWindow(QMainWindow):
                 timeout=self.settings_data.get("deep_research_timeout", 120),
             )
             self.status_label.setText("Ready" if not self.workspace_index else "RAG Ready")
-
-        if text: # Don't add empty user messages for tool continuations
-            msg = {
-                "role": "user",
-                "content": content,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            }
-            if images: msg["images"] = images
-            conv["messages"].append(msg)
 
         self._render_chat(self.chat_tabs.currentIndex())
         self.input_widget.set_streaming(True)
@@ -1858,6 +1851,15 @@ class MainWindow(QMainWindow):
             system_prompt = f"{system_prompt}\n\n{episodic_ctx}"
 
         messages_to_send = conv["messages"]
+        # Avoid showing synthetic RAG-expanded user messages in chat history:
+        # send augmented content to the model only for this request.
+        if text and content != text and conv.get("messages"):
+            tmp_messages = list(conv["messages"])
+            last = dict(tmp_messages[-1])
+            if last.get("role") == "user":
+                last["content"] = content
+                tmp_messages[-1] = last
+                messages_to_send = tmp_messages
         if self.settings_data.get("smart_context", True):
             from ..core.context_manager_v2 import apply_smart_context
             max_ctx = gen_params.get("num_ctx", 4096)
@@ -2147,7 +2149,10 @@ class MainWindow(QMainWindow):
                     if len(new_text) >= 20:
                         log.info("[STREAM] flush pane=%d chunk_len=%d total=%d", pane_idx, len(new_text), len(data["text"]))
                     escaped = html_mod.escape(new_text).replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n").replace("\r", "")
-                    view.page().runJavaScript(f"appendStreamToken('{escaped}');")
+                    view.page().runJavaScript(
+                        f"if (typeof appendStreamToken === 'function') {{ appendStreamToken('{escaped}'); }} "
+                        f"else {{ var el=document.getElementById('streaming-content'); if(el) el.textContent += '{escaped}'; }}"
+                    )
                     data["flushed_text"] = data["text"]
                     
                     # Hot Reload Canvas if active
@@ -2722,8 +2727,24 @@ class MainWindow(QMainWindow):
         except Exception as e:
             log.warning(f"Episodic log failed: {e}")
 
+    def _should_use_workspace_context(self, query):
+        q = (query or "").lower()
+        if not q.strip():
+            return False
+        if "@" in query:
+            return True
+        workspace_terms = (
+            "file", "files", "folder", "directory", "workspace", "repo", "project",
+            "code", "function", "class", "method", "bug", "error", "traceback",
+            "stack", "import", "refactor", "implement", "fix", "test", "pytest",
+            ".py", ".js", ".ts", ".tsx", ".json", ".md", ".sh"
+        )
+        return any(term in q for term in workspace_terms)
+
     def _search_workspace(self, query):
         if not self.workspace_index:
+            return []
+        if not query:
             return []
         
         results = search_index(self.workspace_index, query)
@@ -2735,7 +2756,7 @@ class MainWindow(QMainWindow):
             snippets.append(f"File: {path} (Match Score: {score:.2f})\nRelevant Context:\n{content}\n")
         
         # GraphRAG Augmentation (G1)
-        if self._rag_enabled:
+        if self._rag_enabled and len(query) <= 1000:
             try:
                 graph_context = self.graph_rag.search(query, results)
                 if graph_context:
