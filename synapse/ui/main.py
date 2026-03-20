@@ -1454,7 +1454,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(close_btn)
         dlg.exec_()
 
-    def _send_message(self, text, images=None, files=None, bypass_rag=False):
+    def _send_message(self, text, images=None, files=None, bypass_rag=False, auto_continue_chain=False):
         if hasattr(self, "plugin_manager"):
             text = self.plugin_manager.dispatch_hook("on_message_send", text=text) or text
         force_research = text.strip().lower().startswith("/research")
@@ -1478,10 +1478,10 @@ class MainWindow(QMainWindow):
         # Check for Agent Mode
         is_agentic = self.input_widget.agent_mode_btn.isChecked()
 
-        # Reset recursion counter for new user messages
         if text:
             self._recursion_depth = 0
-            self._auto_continue_count = 0
+            if not auto_continue_chain:
+                self._auto_continue_count = 0
 
         # PH3: Resolve @ Mentions context
         workspace = self.workspace_panel.get_workspace_dir()
@@ -1573,7 +1573,7 @@ class MainWindow(QMainWindow):
         memory_context = self.tool_executor.memory.get_context_string()
         if memory_context:
             system_prompt = f"{system_prompt}\n\n{memory_context}"
-        episodic_ctx = self._get_episodic_context(text)
+        episodic_ctx = self._get_episodic_context((text or "")[:1200])
         if episodic_ctx:
             system_prompt = f"{system_prompt}\n\n{episodic_ctx}"
         # Inject project-specific rules
@@ -2337,7 +2337,7 @@ class MainWindow(QMainWindow):
         self.status_label.setText(f"Auto-continuing... ({self._auto_continue_count}/{max_continues})")
 
         continuation = "Please continue from where you left off."
-        self._send_message(continuation, bypass_rag=True)
+        self._send_message(continuation, bypass_rag=True, auto_continue_chain=True)
 
     def _run_consensus(self, prompt):
         """Run a prompt against multiple models in parallel for consensus."""
@@ -2698,7 +2698,8 @@ class MainWindow(QMainWindow):
     def _get_episodic_context(self, user_text):
         if not user_text or not hasattr(self, "episodic_memory"):
             return ""
-        keywords = " ".join(w for w in user_text.split() if len(w) > 2)[:100]
+        snippet = (user_text or "").strip()[:800]
+        keywords = " ".join(w for w in snippet.split() if len(w.strip()) > 2)[:100]
         if not keywords:
             return ""
         episodes = self.episodic_memory.query_by_topic(keywords, limit=3)

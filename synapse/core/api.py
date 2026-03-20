@@ -335,6 +335,7 @@ class OllamaWorker(BaseAIWorker):
             stats = {}
             tool_calls = []
             first_chunk = True
+            stream_truncated = False
 
             with urllib.request.urlopen(req, timeout=300) as resp:
                 for line in resp:
@@ -363,7 +364,7 @@ class OllamaWorker(BaseAIWorker):
                             "prompt_eval_count": chunk.get("prompt_eval_count", 0)
                         }
                         if chunk.get("done_reason") == "length" or self._is_truncated(full_text, chunk.get("done_reason")):
-                            self.truncated.emit()
+                            stream_truncated = True
 
             if tool_calls:
                 log.info("[OLLAMA] emitting tool_calls_received n=%d", len(tool_calls))
@@ -371,6 +372,8 @@ class OllamaWorker(BaseAIWorker):
 
             log.info("[OLLAMA] emitting response_finished (elapsed=%.1fs)", time.time() - _t_req)
             self.response_finished.emit(full_text, stats)
+            if stream_truncated:
+                self.truncated.emit()
         except Exception as e:
             log.error(f"Ollama error: {e}")
             raise e
@@ -407,6 +410,7 @@ class OpenAIWorker(BaseAIWorker):
             full_text = ""
             tool_calls_map = {}
             usage = {}
+            stream_truncated = False
 
             with urllib.request.urlopen(req, timeout=60) as resp:
                 for line in resp:
@@ -440,7 +444,7 @@ class OpenAIWorker(BaseAIWorker):
                                     if "arguments" in tc["function"]: tool_calls_map[idx]["function"]["arguments"] += tc["function"]["arguments"]
                         
                         if choices[0].get("finish_reason") == "length" or self._is_truncated(full_text, choices[0].get("finish_reason")):
-                            self.truncated.emit()
+                            stream_truncated = True
                     except Exception as e:
                         log.debug(f"Stream chunk parse error: {e}")
                         continue
@@ -456,6 +460,8 @@ class OpenAIWorker(BaseAIWorker):
                 "total_tokens": usage.get("total_tokens", 0)
             }
             self.response_finished.emit(full_text, stats)
+            if stream_truncated:
+                self.truncated.emit()
 
         try:
             self._run_with_retry(_execute)
@@ -503,6 +509,7 @@ class OpenRouterWorker(OpenAIWorker):
             full_text = ""
             tool_calls_map = {}
             usage = {}
+            stream_truncated = False
 
             with urllib.request.urlopen(req, timeout=60) as resp:
                 for line in resp:
@@ -536,7 +543,7 @@ class OpenRouterWorker(OpenAIWorker):
                                     if "arguments" in tc["function"]: tool_calls_map[idx]["function"]["arguments"] += tc["function"]["arguments"]
                         
                         if choices[0].get("finish_reason") == "length" or self._is_truncated(full_text, choices[0].get("finish_reason")):
-                            self.truncated.emit()
+                            stream_truncated = True
                     except Exception as e:
                         log.debug(f"Stream chunk parse error: {e}")
                         continue
@@ -552,6 +559,8 @@ class OpenRouterWorker(OpenAIWorker):
                 "total_tokens": usage.get("total_tokens", 0)
             }
             self.response_finished.emit(full_text, stats)
+            if stream_truncated:
+                self.truncated.emit()
 
         try:
             self._run_with_retry(_execute)
@@ -628,6 +637,7 @@ class AnthropicWorker(BaseAIWorker):
             current_tool_input = ""
             tool_calls = []
             usage = {"input_tokens": 0, "output_tokens": 0}
+            stream_truncated = False
 
             with urllib.request.urlopen(req, timeout=60) as resp:
                 for line in resp:
@@ -676,7 +686,7 @@ class AnthropicWorker(BaseAIWorker):
                                 current_tool_id = None
                         
                         if chunk.get("delta", {}).get("stop_reason") == "max_tokens" or (ctype == "message_stop" and self._is_truncated(full_text, chunk.get("message", {}).get("stop_reason"))):
-                            self.truncated.emit()
+                            stream_truncated = True
                     except Exception as e:
                         log.debug(f"Stream chunk parse error: {e}")
                         continue
@@ -690,6 +700,8 @@ class AnthropicWorker(BaseAIWorker):
                 "output_tokens": usage.get("output_tokens", 0)
             }
             self.response_finished.emit(full_text, stats)
+            if stream_truncated:
+                self.truncated.emit()
 
         try:
             self._run_with_retry(_execute)
