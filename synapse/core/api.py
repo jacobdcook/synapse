@@ -6,7 +6,7 @@ import urllib.error
 import logging
 import time
 from PyQt5.QtCore import QThread, pyqtSignal
-from ..utils.constants import get_ollama_url, save_settings
+from ..utils.constants import get_ollama_url, load_settings, save_settings
 
 log = logging.getLogger(__name__)
 
@@ -223,18 +223,20 @@ class OllamaWorker(BaseAIWorker):
         return keys
 
     def _is_tools_unsupported(self):
-        persisted = set(self.settings.get("ollama_models_without_tools", []) or [])
+        settings = load_settings()
+        persisted = set(settings.get("ollama_models_without_tools", []) or [])
         return any(k in self._models_without_tool_support or k in persisted for k in self._model_keys())
 
     def _persist_tools_unsupported(self):
         for k in self._model_keys():
             self._models_without_tool_support.add(k)
         try:
-            current = set(self.settings.get("ollama_models_without_tools", []) or [])
+            settings = load_settings()
+            current = set(settings.get("ollama_models_without_tools", []) or [])
             updated = sorted(current.union(self._model_keys()))
             if updated != sorted(current):
-                self.settings["ollama_models_without_tools"] = updated
-                save_settings(self.settings)
+                settings["ollama_models_without_tools"] = updated
+                save_settings(settings)
         except Exception as se:
             log.debug(f"Failed to persist no-tools model cache: {se}")
 
